@@ -14,7 +14,11 @@ const DB_PATH = process.env.DB_PATH || '/data/collection.db';
 const BULK_REFRESH_MS = 12 * 60 * 60 * 1000; // 12 hours
 
 // Scryfall requires a descriptive User-Agent for all API requests
+<<<<<<< HEAD
 const SCRYFALL_UA = 'mtg-collection/1.0 (self-hosted; contact your-email@example.com)';
+=======
+const SCRYFALL_UA = `mtg-collection/1.0 (self-hosted; ${process.env.SCRYFALL_CONTACT_EMAIL || 'unknown'})`;
+>>>>>>> 839aaad (fix: Added contact email environment variable)
 
 // ─── Database setup ───────────────────────────────────────────────────────────
 const db = new Database(DB_PATH);
