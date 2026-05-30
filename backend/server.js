@@ -5,8 +5,8 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const https = require('https');
 const http = require('http');
-const { pipeline } = require('stream/promises');
 const zlib = require('zlib');
+const readline = require('readline');
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
@@ -14,11 +14,7 @@ const DB_PATH = process.env.DB_PATH || '/data/collection.db';
 const BULK_REFRESH_MS = 12 * 60 * 60 * 1000; // 12 hours
 
 // Scryfall requires a descriptive User-Agent for all API requests
-<<<<<<< HEAD
 const SCRYFALL_UA = 'mtg-collection/1.0 (self-hosted; contact your-email@example.com)';
-=======
-const SCRYFALL_UA = `mtg-collection/1.0 (self-hosted; ${process.env.SCRYFALL_CONTACT_EMAIL || 'unknown'})`;
->>>>>>> 839aaad (fix: Added contact email environment variable)
 
 // ─── Database setup ───────────────────────────────────────────────────────────
 const db = new Database(DB_PATH);
@@ -95,6 +91,8 @@ async function scryFetch(url, options = {}) {
  * Downloads the Scryfall "oracle_cards" bulk file and upserts every card
  * into card_cache.  Runs in a background async loop.
  */
+const BATCH_SIZE = 500; // cards per SQLite transaction
+
 async function refreshBulkCache() {
   console.log('[bulk] Starting Scryfall bulk-data refresh…');
   try {
@@ -105,9 +103,9 @@ async function refreshBulkCache() {
     }
     const index = await indexRes.json();
 
-    // Step 2: find the oracle_cards entry
-    const entry = index.data.find((d) => d.type === 'default_cards');
-    if (!entry) throw new Error('default_cards entry not found in bulk-data index');
+    // Step 2: find the oracle_cards entry (one canonical card per Oracle ID)
+    const entry = index.data.find((d) => d.type === 'oracle_cards');
+    if (!entry) throw new Error('oracle_cards entry not found in bulk-data index');
 
     const downloadUri = entry.download_uri;
     const updatedAt  = entry.updated_at;
@@ -121,11 +119,7 @@ async function refreshBulkCache() {
 
     console.log(`[bulk] Downloading oracle_cards from ${downloadUri} …`);
 
-    // Step 3: stream-download and parse (file is gzip-encoded JSON array)
-    const cards = await fetchBulkJson(downloadUri);
-
-    console.log(`[bulk] Inserting ${cards.length} cards into card_cache…`);
-
+    // Prepare upsert statement once
     const upsert = db.prepare(`
       INSERT INTO card_cache
         (scryfall_id, name, set_code, image_uri, mana_cost, type_line,
@@ -145,70 +139,99 @@ async function refreshBulkCache() {
         prices_usd  = excluded.prices_usd,
         cached_at   = excluded.cached_at
     `);
-
-    const insertMany = db.transaction((rows) => {
+    const flushBatch = db.transaction((rows) => {
       for (const row of rows) upsert.run(row);
     });
 
-    // Map Scryfall card objects to our row shape
-    const rows = cards.map((c) => ({
-      scryfall_id: c.id,
-      name:        c.name,
-      set_code:    c.set ?? null,
-      image_uri:   c.image_uris?.normal ?? c.card_faces?.[0]?.image_uris?.normal ?? null,
-      mana_cost:   c.mana_cost ?? null,
-      type_line:   c.type_line ?? null,
-      oracle_text: c.oracle_text ?? null,
-      colors:      c.colors ? JSON.stringify(c.colors) : null,
-      rarity:      c.rarity ?? null,
-      prices_usd:  c.prices?.usd ? parseFloat(c.prices.usd) : null,
-    }));
+    function cardToRow(c) {
+      return {
+        scryfall_id: c.id,
+        name:        c.name,
+        set_code:    c.set ?? null,
+        image_uri:   c.image_uris?.normal ?? c.card_faces?.[0]?.image_uris?.normal ?? null,
+        mana_cost:   c.mana_cost ?? null,
+        type_line:   c.type_line ?? null,
+        oracle_text: c.oracle_text ?? null,
+        colors:      c.colors ? JSON.stringify(c.colors) : null,
+        rarity:      c.rarity ?? null,
+        prices_usd:  c.prices?.usd ? parseFloat(c.prices.usd) : null,
+      };
+    }
 
-    insertMany(rows);
+    // Step 3: stream-parse and batch-insert — never holds all cards in memory
+    let totalInserted = 0;
+    await streamBulkJson(downloadUri, (batch) => {
+      flushBatch(batch.map(cardToRow));
+      totalInserted += batch.length;
+      if (totalInserted % 10000 === 0) {
+        console.log(`[bulk] …${totalInserted} cards inserted`);
+      }
+    }, BATCH_SIZE);
 
     db.prepare("INSERT OR REPLACE INTO bulk_meta (key, value) VALUES ('bulk_updated_at', ?)")
       .run(updatedAt);
 
-    console.log('[bulk] Refresh complete.');
+    console.log(`[bulk] Refresh complete. ${totalInserted} cards cached.`);
   } catch (err) {
     console.error('[bulk] Refresh failed:', err.message);
   }
 }
 
 /**
- * Fetches a (potentially gzip-encoded) JSON array from a URL using
- * Node's https module directly, returning the parsed array.
- * This avoids any issues with fetch + large streaming bodies in some runtimes.
+ * Streams the bulk JSON file line-by-line, calling onBatch(cards[]) every
+ * batchSize cards.  Never holds more than one batch in memory at a time,
+ * avoiding Node's ~512 MB string / buffer limit on the full ~280 MB file.
  */
-function fetchBulkJson(url) {
+function streamBulkJson(url, onBatch, batchSize = 500) {
   return new Promise((resolve, reject) => {
     const proto = url.startsWith('https') ? https : http;
     proto.get(url, { headers: { 'User-Agent': SCRYFALL_UA } }, (res) => {
       // Follow one redirect (Scryfall returns 302 → data.scryfall.io)
       if (res.statusCode === 301 || res.statusCode === 302) {
-        return fetchBulkJson(res.headers.location).then(resolve).catch(reject);
+        return streamBulkJson(res.headers.location, onBatch, batchSize)
+          .then(resolve).catch(reject);
       }
       if (res.statusCode !== 200) {
         return reject(new Error(`HTTP ${res.statusCode} fetching bulk data`));
       }
 
-      const chunks = [];
-      let stream = res;
+      // Decompress if needed
+      const bodyStream = res.headers['content-encoding'] === 'gzip'
+        ? res.pipe(zlib.createGunzip())
+        : res;
 
-      if (res.headers['content-encoding'] === 'gzip') {
-        stream = res.pipe(zlib.createGunzip());
-      }
+      bodyStream.on('error', reject);
 
-      stream.on('data', (chunk) => chunks.push(chunk));
-      stream.on('end', () => {
+      let batch = [];
+      const rl = readline.createInterface({ input: bodyStream, crlfDelay: Infinity });
+
+      rl.on('line', (line) => {
+        // Each line is '[', ']', empty, or a card JSON object (optionally with trailing comma)
+        const trimmed = line.trim();
+        if (trimmed === '[' || trimmed === ']' || trimmed === '') return;
+
+        const json = trimmed.endsWith(',') ? trimmed.slice(0, -1) : trimmed;
         try {
-          const json = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-          resolve(json);
+          batch.push(JSON.parse(json));
+        } catch {
+          // Skip malformed lines
+        }
+
+        if (batch.length >= batchSize) {
+          try { onBatch(batch); } catch (e) { reject(e); }
+          batch = [];
+        }
+      });
+
+      rl.on('close', () => {
+        try {
+          if (batch.length > 0) onBatch(batch); // flush remainder
+          resolve();
         } catch (e) {
           reject(e);
         }
       });
-      stream.on('error', reject);
+      rl.on('error', reject);
     }).on('error', reject);
   });
 }
