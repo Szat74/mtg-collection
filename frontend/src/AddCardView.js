@@ -20,7 +20,7 @@ export default function AddCardView({ decks, refresh, showToast, setView }) {
     if (q.length < 2) { setResults([]); return; }
     setLoading(true);
     try {
-      const res = await fetch(`${API}/scryfall/search?q=${encodeURIComponent(q)}`);
+      const res = await fetch(`${API}/search?q=${encodeURIComponent(q)}`);
       const data = await res.json();
       setResults(data.data || []);
     } catch { setResults([]); }
