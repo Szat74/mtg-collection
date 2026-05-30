@@ -14,7 +14,7 @@ const DB_PATH = process.env.DB_PATH || '/data/collection.db';
 const BULK_REFRESH_MS = 12 * 60 * 60 * 1000; // 12 hours
 
 // Scryfall requires a descriptive User-Agent for all API requests
-const SCRYFALL_UA = 'mtg-collection/1.0 (self-hosted; contact your-email@example.com)';
+const SCRYFALL_UA = `mtg-collection/1.0 (self-hosted; ${process.env.SCRYFALL_CONTACT_EMAIL || 'unknown'})`;
 
 // ─── Database setup ───────────────────────────────────────────────────────────
 const db = new Database(DB_PATH);
@@ -103,9 +103,9 @@ async function refreshBulkCache() {
     }
     const index = await indexRes.json();
 
-    // Step 2: find the oracle_cards entry (one canonical card per Oracle ID)
-    const entry = index.data.find((d) => d.type === 'oracle_cards');
-    if (!entry) throw new Error('oracle_cards entry not found in bulk-data index');
+    // Step 2: find the default_cards entry
+    const entry = index.data.find((d) => d.type === 'default_cards');
+    if (!entry) throw new Error('default_cards entry not found in bulk-data index');
 
     const downloadUri = entry.download_uri;
     const updatedAt  = entry.updated_at;
