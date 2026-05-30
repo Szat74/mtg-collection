@@ -5,10 +5,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-env:
-  REGISTRY: ghcr.io
-  OWNER: ${{ github.repository_owner }}
-
 jobs:
   build-backend:
     runs-on: ubuntu-latest
@@ -20,6 +16,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Lowercase owner name
+        run: echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_ENV
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -28,13 +27,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build & push backend
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ./backend
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/mtg-collection-backend:latest
-            ghcr.io/${{ github.repository_owner }}/mtg-collection-backend:${{ github.sha }}
+            ghcr.io/${{ env.OWNER_LC }}/mtg-collection-backend:latest
+            ghcr.io/${{ env.OWNER_LC }}/mtg-collection-backend:${{ github.sha }}
 
   build-frontend:
     runs-on: ubuntu-latest
@@ -46,6 +45,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Lowercase owner name
+        run: echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_ENV
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -54,10 +56,10 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build & push frontend
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ./frontend
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/mtg-collection-frontend:latest
-            ghcr.io/${{ github.repository_owner }}/mtg-collection-frontend:${{ github.sha }}
+            ghcr.io/${{ env.OWNER_LC }}/mtg-collection-frontend:latest
+            ghcr.io/${{ env.OWNER_LC }}/mtg-collection-frontend:${{ github.sha }}
