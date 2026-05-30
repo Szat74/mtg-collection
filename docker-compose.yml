@@ -1,0 +1,44 @@
+version: '3.9'
+
+# ── MTG Collection Manager ────────────────────────────────────────────────────
+# Replace YOUR_GITHUB_USERNAME below with your actual GitHub username (lowercase)
+# Images are built automatically via GitHub Actions on every push to main.
+
+services:
+  backend:
+    image: ghcr.io/YOUR_GITHUB_USERNAME/mtg-collection-backend:latest
+    container_name: mtg-backend
+    restart: unless-stopped
+    volumes:
+      - mtg-data:/data          # SQLite database
+    networks:
+      - mtg-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/api/stats"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    image: ghcr.io/YOUR_GITHUB_USERNAME/mtg-collection-frontend:latest
+    container_name: mtg-frontend
+    restart: unless-stopped
+    ports:
+      - "8080:80"               # Change left side to use a different host port
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - mtg-net
+
+volumes:
+  mtg-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/mtg-collection/data   # OMV path — adjust if needed
+
+networks:
+  mtg-net:
+    driver: bridge
