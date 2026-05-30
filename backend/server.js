@@ -105,9 +105,9 @@ async function refreshBulkCache() {
     }
     const index = await indexRes.json();
 
-    // Step 2: find the oracle_cards entry (one canonical card per Oracle ID)
-    const entry = index.data.find((d) => d.type === 'oracle_cards');
-    if (!entry) throw new Error('oracle_cards entry not found in bulk-data index');
+    // Step 2: find the oracle_cards entry
+    const entry = index.data.find((d) => d.type === 'default_cards');
+    if (!entry) throw new Error('default_cards entry not found in bulk-data index');
 
     const downloadUri = entry.download_uri;
     const updatedAt  = entry.updated_at;
