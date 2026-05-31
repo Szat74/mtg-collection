@@ -1,17 +1,6 @@
-# ── Drop this file into OMV's Docker Compose manager ─────────────────────────
-# Pulls pre-built images from GitHub Container Registry.
-# No build step needed on your NAS.
-#
-# Before deploying:
-#   1. Replace YOUR_GITHUB_USERNAME (lowercase) with your GitHub username
-#   2. Create the data dir on your NAS:  sudo mkdir -p /srv/mtg-collection/data
-#   3. Make the packages public on ghcr.io (or add pull credentials — see README)
-
-version: '3.9'
-
 services:
   mtg-backend:
-    image: ghcr.io/YOUR_GITHUB_USERNAME/mtg-collection-backend:latest
+    image: ghcr.io/szat74/mtg-collection-backend:latest
     container_name: mtg-backend
     restart: unless-stopped
     environment:
@@ -19,7 +8,7 @@ services:
       # matching the healthcheck and nginx proxy target.
       PORT: 3001
     volumes:
-      - /srv/mtg-collection/data:/data
+      - CHANGE_TO_YOUR_COMPOSE_PATH:/data
     networks:
       - mtg-net
     healthcheck:
@@ -29,7 +18,7 @@ services:
       retries: 3
 
   mtg-frontend:
-    image: ghcr.io/YOUR_GITHUB_USERNAME/mtg-collection-frontend:latest
+    image: ghcr.io/szat74/mtg-collection-frontend:latest
     container_name: mtg-frontend
     restart: unless-stopped
     ports:
