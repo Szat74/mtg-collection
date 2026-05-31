@@ -9,6 +9,10 @@ services:
     image: ghcr.io/YOUR_GITHUB_USERNAME/mtg-collection-backend:latest
     container_name: mtg-backend
     restart: unless-stopped
+    environment:
+      # FIX: explicitly set PORT so server.js binds to 3001,
+      # matching the healthcheck and nginx proxy target.
+      PORT: 3001
     volumes:
       - mtg-data:/data          # SQLite database
     networks:

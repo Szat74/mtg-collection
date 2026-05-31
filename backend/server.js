@@ -9,7 +9,7 @@ const zlib = require('zlib');
 const readline = require('readline');
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;          // FIX: was 3000; Dockerfile/healthcheck expect 3001
 const DB_PATH = process.env.DB_PATH || '/data/collection.db';
 const BULK_REFRESH_MS = 12 * 60 * 60 * 1000; // 12 hours
 
@@ -64,8 +64,6 @@ db.exec(`
 `);
 
 // ─── HTTPS-safe fetch helper ──────────────────────────────────────────────────
-// Node's global fetch (v18+) works fine with https, but we add a UA header
-// and a timeout so Docker networking issues surface quickly.
 async function scryFetch(url, options = {}) {
   const controller = new AbortController();
   const tid = setTimeout(() => controller.abort(), 30_000);
@@ -86,40 +84,29 @@ async function scryFetch(url, options = {}) {
 }
 
 // ─── Bulk-data cache ──────────────────────────────────────────────────────────
-
-/**
- * Downloads the Scryfall "oracle_cards" bulk file and upserts every card
- * into card_cache.  Runs in a background async loop.
- */
-const BATCH_SIZE = 500; // cards per SQLite transaction
+const BATCH_SIZE = 500;
 
 async function refreshBulkCache() {
   console.log('[bulk] Starting Scryfall bulk-data refresh…');
   try {
-    // Step 1: fetch the bulk-data index
     const indexRes = await scryFetch('https://api.scryfall.com/bulk-data');
-    if (!indexRes.ok) {
-      throw new Error(`bulk-data index HTTP ${indexRes.status}`);
-    }
+    if (!indexRes.ok) throw new Error(`bulk-data index HTTP ${indexRes.status}`);
     const index = await indexRes.json();
 
-    // Step 2: find the default_cards entry
     const entry = index.data.find((d) => d.type === 'default_cards');
     if (!entry) throw new Error('default_cards entry not found in bulk-data index');
 
     const downloadUri = entry.download_uri;
     const updatedAt  = entry.updated_at;
 
-    // Skip if we already cached this exact snapshot
     const lastCached = db.prepare("SELECT value FROM bulk_meta WHERE key='bulk_updated_at'").get();
     if (lastCached && lastCached.value === updatedAt) {
       console.log('[bulk] Cache is current, skipping download.');
       return;
     }
 
-    console.log(`[bulk] Downloading oracle_cards from ${downloadUri} …`);
+    console.log(`[bulk] Downloading default_cards from ${downloadUri} …`);
 
-    // Prepare upsert statement once
     const upsert = db.prepare(`
       INSERT INTO card_cache
         (scryfall_id, name, set_code, image_uri, mana_cost, type_line,
@@ -158,7 +145,6 @@ async function refreshBulkCache() {
       };
     }
 
-    // Step 3: stream-parse and batch-insert — never holds all cards in memory
     let totalInserted = 0;
     await streamBulkJson(downloadUri, (batch) => {
       flushBatch(batch.map(cardToRow));
@@ -177,16 +163,10 @@ async function refreshBulkCache() {
   }
 }
 
-/**
- * Streams the bulk JSON file line-by-line, calling onBatch(cards[]) every
- * batchSize cards.  Never holds more than one batch in memory at a time,
- * avoiding Node's ~512 MB string / buffer limit on the full ~280 MB file.
- */
 function streamBulkJson(url, onBatch, batchSize = 500) {
   return new Promise((resolve, reject) => {
     const proto = url.startsWith('https') ? https : http;
     proto.get(url, { headers: { 'User-Agent': SCRYFALL_UA } }, (res) => {
-      // Follow one redirect (Scryfall returns 302 → data.scryfall.io)
       if (res.statusCode === 301 || res.statusCode === 302) {
         return streamBulkJson(res.headers.location, onBatch, batchSize)
           .then(resolve).catch(reject);
@@ -195,7 +175,6 @@ function streamBulkJson(url, onBatch, batchSize = 500) {
         return reject(new Error(`HTTP ${res.statusCode} fetching bulk data`));
       }
 
-      // Decompress if needed
       const bodyStream = res.headers['content-encoding'] === 'gzip'
         ? res.pipe(zlib.createGunzip())
         : res;
@@ -206,17 +185,14 @@ function streamBulkJson(url, onBatch, batchSize = 500) {
       const rl = readline.createInterface({ input: bodyStream, crlfDelay: Infinity });
 
       rl.on('line', (line) => {
-        // Each line is '[', ']', empty, or a card JSON object (optionally with trailing comma)
         const trimmed = line.trim();
         if (trimmed === '[' || trimmed === ']' || trimmed === '') return;
-
         const json = trimmed.endsWith(',') ? trimmed.slice(0, -1) : trimmed;
         try {
           batch.push(JSON.parse(json));
         } catch {
           // Skip malformed lines
         }
-
         if (batch.length >= batchSize) {
           try { onBatch(batch); } catch (e) { reject(e); }
           batch = [];
@@ -225,7 +201,7 @@ function streamBulkJson(url, onBatch, batchSize = 500) {
 
       rl.on('close', () => {
         try {
-          if (batch.length > 0) onBatch(batch); // flush remainder
+          if (batch.length > 0) onBatch(batch);
           resolve();
         } catch (e) {
           reject(e);
@@ -236,23 +212,20 @@ function streamBulkJson(url, onBatch, batchSize = 500) {
   });
 }
 
-/** Schedule a refresh now and every 12 hours. */
 function startBulkScheduler() {
-  refreshBulkCache(); // run immediately on startup
+  refreshBulkCache();
   setInterval(refreshBulkCache, BULK_REFRESH_MS);
 }
 
 // ─── Express app ──────────────────────────────────────────────────────────────
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '../frontend/dist')));
 
-// ── Card search (hits local cache first, falls back to live Scryfall) ─────────
+// ── Card search ───────────────────────────────────────────────────────────────
 app.get('/api/search', async (req, res) => {
   const q = (req.query.q || '').trim();
   if (!q) return res.json([]);
 
-  // 1. Try local cache (fuzzy prefix match)
   const cached = db.prepare(`
     SELECT * FROM card_cache
     WHERE lower(name) LIKE lower(?)
@@ -260,21 +233,15 @@ app.get('/api/search', async (req, res) => {
     LIMIT 20
   `).all(`${q}%`);
 
-  if (cached.length > 0) {
-    return res.json(cached.map(formatCacheRow));
-  }
+  if (cached.length > 0) return res.json(cached.map(formatCacheRow));
 
-  // 2. Fall back to live Scryfall /cards/search
   try {
     const url = `https://api.scryfall.com/cards/search?q=${encodeURIComponent(q)}&order=name`;
     const sfRes = await scryFetch(url);
-
-    if (sfRes.status === 404) return res.json([]); // no results
+    if (sfRes.status === 404) return res.json([]);
     if (!sfRes.ok) throw new Error(`Scryfall HTTP ${sfRes.status}`);
-
     const data = await sfRes.json();
-    const cards = (data.data || []).slice(0, 20).map(formatScryfallCard);
-    return res.json(cards);
+    return res.json((data.data || []).slice(0, 20).map(formatScryfallCard));
   } catch (err) {
     console.error('[search] Scryfall live search failed:', err.message);
     return res.status(502).json({ error: 'Card search unavailable', detail: err.message });
@@ -363,7 +330,6 @@ app.get('/api/decks', (req, res) => {
 });
 
 // ── Bulk import ───────────────────────────────────────────────────────────────
-// Format: "4 foil Thoughtseize | Deck Name"
 app.post('/api/import', async (req, res) => {
   const lines = (req.body.text || '').split('\n').map((l) => l.trim()).filter(Boolean);
   let imported = 0;
@@ -385,7 +351,6 @@ app.post('/api/import', async (req, res) => {
     const name     = match[3].trim();
     const deck     = deckPart || null;
 
-    // Look up card info from local cache
     const cached = db.prepare(
       'SELECT * FROM card_cache WHERE lower(name) = lower(?) LIMIT 1'
     ).get(name);
@@ -424,7 +389,7 @@ app.get('/api/export/csv', (req, res) => {
   res.send(header + body);
 });
 
-// ── Bulk-cache status endpoint ─────────────────────────────────────────────────
+// ── Cache status ──────────────────────────────────────────────────────────────
 app.get('/api/cache/status', (req, res) => {
   const meta  = db.prepare("SELECT value FROM bulk_meta WHERE key='bulk_updated_at'").get();
   const count = db.prepare('SELECT COUNT(*) AS n FROM card_cache').get();
