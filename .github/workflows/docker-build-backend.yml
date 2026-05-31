@@ -1,8 +1,11 @@
-name: Build & Push Docker Images
+name: Build & Push Backend
 
 on:
   push:
     branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/docker-build-backend.yml'
   workflow_dispatch:
 
 jobs:
@@ -41,39 +44,3 @@ jobs:
           tags: |
             ghcr.io/${{ env.OWNER_LC }}/mtg-collection-backend:latest
             ghcr.io/${{ env.OWNER_LC }}/mtg-collection-backend:${{ github.sha }}
-
-  build-frontend:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Lowercase owner name
-        run: echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_ENV
-
-      - name: Set up QEMU (for cross-platform builds)
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build & push frontend
-        uses: docker/build-push-action@v6
-        with:
-          context: ./frontend
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: |
-            ghcr.io/${{ env.OWNER_LC }}/mtg-collection-frontend:latest
-            ghcr.io/${{ env.OWNER_LC }}/mtg-collection-frontend:${{ github.sha }}
