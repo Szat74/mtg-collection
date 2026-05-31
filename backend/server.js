@@ -63,6 +63,15 @@ db.exec(`
   );
 `);
 
+// ─── Migrations — safe to run on every startup ────────────────────────────────
+// Adds columns that were introduced after initial release without dropping data.
+for (const sql of [
+  "ALTER TABLE collection ADD COLUMN set_name TEXT",
+  "ALTER TABLE card_cache ADD COLUMN set_name TEXT",
+]) {
+  try { db.exec(sql); } catch { /* column already exists — ignore */ }
+}
+
 // ─── Fetch helper ─────────────────────────────────────────────────────────────
 async function scryFetch(url, options = {}) {
   const controller = new AbortController();
