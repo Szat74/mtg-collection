@@ -8,10 +8,11 @@ import StatsView from './StatsView';
 const API = '/api';
 
 export default function App() {
-  const [view, setView] = useState('collection');
+  const [view, setView]   = useState('collection');
   const [cards, setCards] = useState([]);
   const [stats, setStats] = useState(null);
   const [decks, setDecks] = useState([]);
+  const [groups, setGroups] = useState([]);
   const [toast, setToast] = useState(null);
 
   const showToast = (msg, type = 'success') => {
@@ -22,8 +23,7 @@ export default function App() {
   const fetchCards = useCallback(async (params = {}) => {
     const qs = new URLSearchParams(params).toString();
     const res = await fetch(`${API}/cards${qs ? '?' + qs : ''}`);
-    const data = await res.json();
-    setCards(data);
+    setCards(await res.json());
   }, []);
 
   const fetchStats = useCallback(async () => {
@@ -36,13 +36,19 @@ export default function App() {
     setDecks(await res.json());
   }, []);
 
+  const fetchGroups = useCallback(async () => {
+    const res = await fetch(`${API}/groups`);
+    setGroups(await res.json());
+  }, []);
+
   useEffect(() => {
     fetchCards();
     fetchStats();
     fetchDecks();
-  }, [fetchCards, fetchStats, fetchDecks]);
+    fetchGroups();
+  }, [fetchCards, fetchStats, fetchDecks, fetchGroups]);
 
-  const refresh = () => { fetchCards(); fetchStats(); fetchDecks(); };
+  const refresh = () => { fetchCards(); fetchStats(); fetchDecks(); fetchGroups(); };
 
   return (
     <div className="app">
@@ -76,10 +82,16 @@ export default function App() {
 
       <main className="app-main">
         {view === 'collection' && (
-          <CollectionView cards={cards} decks={decks} fetchCards={fetchCards} refresh={refresh} showToast={showToast} />
+          <CollectionView
+            cards={cards} decks={decks} groups={groups}
+            fetchCards={fetchCards} refresh={refresh} showToast={showToast}
+          />
         )}
         {view === 'add' && (
-          <AddCardView decks={decks} refresh={refresh} showToast={showToast} setView={setView} />
+          <AddCardView
+            decks={decks} groups={groups}
+            refresh={refresh} showToast={showToast} setView={setView}
+          />
         )}
         {view === 'import' && (
           <ImportView decks={decks} refresh={refresh} showToast={showToast} setView={setView} />
@@ -89,9 +101,7 @@ export default function App() {
         )}
       </main>
 
-      {toast && (
-        <div className={`toast toast-${toast.type}`}>{toast.msg}</div>
-      )}
+      {toast && <div className={`toast toast-${toast.type}`}>{toast.msg}</div>}
     </div>
   );
 }

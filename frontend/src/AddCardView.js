@@ -2,75 +2,105 @@ import React, { useState, useRef } from 'react';
 
 const API = '/api';
 
-export default function AddCardView({ decks, refresh, showToast, setView }) {
-  const [query, setQuery] = useState('');
-  const [setCode, setSetCode] = useState('');
-  const [collNum, setCollNum] = useState('');
-  const [results, setResults] = useState([]);
-  const [selected, setSelected] = useState(null);
-  const [qty, setQty] = useState(1);
-  const [foil, setFoil] = useState(false);
-  const [deck, setDeck] = useState('');
+export default function AddCardView({ decks, groups, refresh, showToast, setView }) {
+  const [query, setQuery]           = useState('');
+  const [results, setResults]       = useState([]);
+  const [selectedName, setSelectedName] = useState(null);   // card name chosen from search
+  const [printings, setPrintings]   = useState([]);          // all versions of that name
+  const [loadingSearch, setLoadingSearch] = useState(false);
+  const [loadingPrints, setLoadingPrints] = useState(false);
+  const [selectedCard, setSelectedCard]   = useState(null);  // specific printing chosen
+
+  // Add-form state
+  const [qty, setQty]         = useState(1);
+  const [foil, setFoil]       = useState(false);
+  const [selDecks, setSelDecks] = useState([]);
   const [newDeck, setNewDeck] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [mode, setMode] = useState('name'); // 'name' | 'set'
+  const [selGroups, setSelGroups] = useState([]);
+
   const debounce = useRef(null);
 
+  // ── Step 1: search by name (deduplicated) ──────────────────────────────────
   const searchByName = async (q) => {
     if (q.length < 2) { setResults([]); return; }
-    setLoading(true);
+    setLoadingSearch(true);
     try {
-      const res = await fetch(`${API}/search?q=${encodeURIComponent(q)}`);
+      const res  = await fetch(`${API}/search?q=${encodeURIComponent(q)}`);
       const data = await res.json();
       setResults(data.data || []);
     } catch { setResults([]); }
-    setLoading(false);
+    setLoadingSearch(false);
   };
 
   const handleQueryChange = (e) => {
     const v = e.target.value;
     setQuery(v);
+    setSelectedName(null);
+    setSelectedCard(null);
+    setPrintings([]);
     clearTimeout(debounce.current);
     debounce.current = setTimeout(() => searchByName(v), 400);
   };
 
-  const searchBySet = async () => {
-    if (!setCode || !collNum) return;
-    setLoading(true);
+  // ── Step 2: load all printings for the chosen name ─────────────────────────
+  const selectName = async (card) => {
+    setSelectedName(card.name);
+    setResults([]);
+    setQuery(card.name);
+    setSelectedCard(null);
+    setLoadingPrints(true);
     try {
-      const res = await fetch(`${API}/scryfall/card/${setCode.toLowerCase()}/${collNum}`);
+      const res  = await fetch(`${API}/printings/${encodeURIComponent(card.name)}`);
       const data = await res.json();
-      if (data.id) { setSelected(data); setResults([]); }
-      else showToast('Card not found', 'error');
-    } catch { showToast('Card not found', 'error'); }
-    setLoading(false);
+      setPrintings(data.data || []);
+    } catch { setPrintings([]); showToast('Could not load printings', 'error'); }
+    setLoadingPrints(false);
   };
 
+  // ── Step 3: pick a specific printing ──────────────────────────────────────
+  const selectPrinting = (card) => {
+    setSelectedCard(card);
+  };
+
+  // ── Deck multi-select helpers ──────────────────────────────────────────────
+  const toggleDeck = (d) =>
+    setSelDecks(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]);
+
+  const toggleGroup = (g) =>
+    setSelGroups(prev => prev.includes(g) ? prev.filter(x => x !== g) : [...prev, g]);
+
+  // ── Add to collection ──────────────────────────────────────────────────────
   const addCard = async () => {
-    if (!selected) return;
-    const finalDeck = deck === '__new__' ? newDeck : deck;
+    if (!selectedCard) return;
+    const finalDecks = newDeck.trim()
+      ? [...new Set([...selDecks, newDeck.trim()])]
+      : selDecks;
+
     const res = await fetch(`${API}/cards`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scryfall_card: selected, quantity: qty, foil, deck: finalDeck }),
+      body: JSON.stringify({
+        scryfall_card: selectedCard,
+        quantity: qty,
+        foil,
+        decks: finalDecks,
+        groups: selGroups,
+      }),
     });
+
     if (res.ok) {
-      showToast(`Added ${selected.name} ×${qty}${foil ? ' (foil)' : ''}`);
+      showToast(`Added ${selectedCard.name} ×${qty}${foil ? ' (foil)' : ''}`);
       refresh();
-      setSelected(null);
-      setResults([]);
-      setQuery('');
-      setSetCode('');
-      setCollNum('');
-      setQty(1);
-      setFoil(false);
+      // Reset everything
+      setQuery(''); setSelectedName(null); setSelectedCard(null); setPrintings([]);
+      setQty(1); setFoil(false); setSelDecks([]); setNewDeck(''); setSelGroups([]);
     } else {
       showToast('Failed to add card', 'error');
     }
   };
 
-  const img = selected
-    ? (selected.image_uris?.normal || selected.card_faces?.[0]?.image_uris?.normal)
+  const previewImg = selectedCard
+    ? (selectedCard.image_uris?.normal ?? selectedCard.card_faces?.[0]?.image_uris?.normal)
     : null;
 
   return (
@@ -78,70 +108,116 @@ export default function AddCardView({ decks, refresh, showToast, setView }) {
       <div className="add-left">
         <h2 className="section-title">Add a Card</h2>
 
-        <div className="mode-tabs">
-          <button className={mode === 'name' ? 'active' : ''} onClick={() => setMode('name')}>Search by Name</button>
-          <button className={mode === 'set' ? 'active' : ''} onClick={() => setMode('set')}>Set + Collector #</button>
+        {/* ── Step 1: name search ── */}
+        <div className="search-block">
+          <input
+            className="search-input"
+            placeholder="Type a card name…"
+            value={query}
+            onChange={handleQueryChange}
+            autoFocus
+          />
+          {loadingSearch && <div className="searching">Searching…</div>}
+          {results.length > 0 && (
+            <div className="search-results">
+              {results.map(card => (
+                <div
+                  key={card.id}
+                  className="result-row"
+                  onClick={() => selectName(card)}
+                >
+                  <span className="result-name">{card.name}</span>
+                  <span className="result-set">{card.type_line}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
-        {mode === 'name' && (
-          <div className="search-block">
-            <input
-              className="search-input"
-              placeholder="Type a card name…"
-              value={query}
-              onChange={handleQueryChange}
-              autoFocus
-            />
-            {loading && <div className="searching">Searching Scryfall…</div>}
-            {results.length > 0 && (
-              <div className="search-results">
-                {results.slice(0, 20).map(card => (
+        {/* ── Step 2: version picker ── */}
+        {selectedName && (
+          <div className="version-picker">
+            <div className="version-picker-title">
+              Select printing of <strong>{selectedName}</strong>
+            </div>
+            {loadingPrints && <div className="searching">Loading printings…</div>}
+            {!loadingPrints && printings.length === 0 && (
+              <div className="searching">No printings found.</div>
+            )}
+            <div className="printings-grid">
+              {printings.map(card => {
+                const img = card.image_uris?.normal ?? card.card_faces?.[0]?.image_uris?.normal;
+                const price = card.prices?.usd ? `$${parseFloat(card.prices.usd).toFixed(2)}` : '—';
+                const isSelected = selectedCard?.id === card.id;
+                return (
                   <div
                     key={card.id}
-                    className={`result-row ${selected?.id === card.id ? 'selected' : ''}`}
-                    onClick={() => { setSelected(card); setResults([]); setQuery(card.name); }}
+                    className={`printing-card ${isSelected ? 'selected' : ''}`}
+                    onClick={() => selectPrinting(card)}
                   >
-                    <span className="result-name">{card.name}</span>
-                    <span className="result-set">{card.set_name} ({card.set?.toUpperCase()})</span>
+                    {img && <img src={img} alt={card.name} loading="lazy" />}
+                    <div className="printing-info">
+                      <span className="printing-set">{card.set_name}</span>
+                      <span className="printing-num">#{card.collector_number}</span>
+                      <span className="printing-price">{price}</span>
+                    </div>
                   </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {mode === 'set' && (
-          <div className="search-block">
-            <div className="set-row">
-              <input placeholder="Set code (e.g. dmr)" value={setCode} onChange={e => setSetCode(e.target.value)} />
-              <input placeholder="Collector # (e.g. 123)" value={collNum} onChange={e => setCollNum(e.target.value)} />
-              <button className="btn-primary" onClick={searchBySet} disabled={loading}>Lookup</button>
+                );
+              })}
             </div>
           </div>
         )}
 
-        {selected && (
+        {/* ── Step 3: add form ── */}
+        {selectedCard && (
           <div className="add-form">
-            <div className="selected-name">Selected: <strong>{selected.name}</strong> — {selected.set_name}</div>
+            <div className="selected-name">
+              <strong>{selectedCard.name}</strong>
+              &nbsp;— {selectedCard.set_name} #{selectedCard.collector_number}
+              {selectedCard.prices?.usd && (
+                <span className="selected-price">&nbsp;· ${parseFloat(selectedCard.prices.usd).toFixed(2)}</span>
+              )}
+            </div>
+
             <div className="form-row">
               <label>Quantity
-                <input type="number" min="1" max="99" value={qty} onChange={e => setQty(parseInt(e.target.value) || 1)} />
+                <input type="number" min="1" max="99" value={qty}
+                  onChange={e => setQty(parseInt(e.target.value) || 1)} />
               </label>
               <label className="foil-toggle">
                 <input type="checkbox" checked={foil} onChange={e => setFoil(e.target.checked)} />
                 Foil
               </label>
             </div>
-            <label>Deck
-              <select value={deck} onChange={e => setDeck(e.target.value)}>
-                <option value="">— none —</option>
-                {decks.map(d => <option key={d} value={d}>{d}</option>)}
-                <option value="__new__">+ New deck…</option>
-              </select>
-            </label>
-            {deck === '__new__' && (
-              <input placeholder="New deck name" value={newDeck} onChange={e => setNewDeck(e.target.value)} />
-            )}
+
+            <label>Decks <span className="label-hint">(select multiple)</span></label>
+            <div className="multi-select-list">
+              {decks.map(d => (
+                <label key={d} className="multi-select-item">
+                  <input type="checkbox" checked={selDecks.includes(d)}
+                    onChange={() => toggleDeck(d)} />
+                  {d}
+                </label>
+              ))}
+            </div>
+            <input
+              className="new-deck-input"
+              placeholder="+ New deck name"
+              value={newDeck}
+              onChange={e => setNewDeck(e.target.value)}
+            />
+
+            <label>Groups <span className="label-hint">(select multiple)</span></label>
+            <div className="multi-select-list">
+              {(groups || []).map(g => (
+                <label key={g} className="multi-select-item">
+                  <input type="checkbox" checked={selGroups.includes(g)}
+                    onChange={() => toggleGroup(g)} />
+                  {g}
+                </label>
+              ))}
+            </div>
+
             <button className="btn-primary btn-add" onClick={addCard}>
               Add to Collection
             </button>
@@ -150,10 +226,10 @@ export default function AddCardView({ decks, refresh, showToast, setView }) {
       </div>
 
       <div className="add-right">
-        {img
-          ? <img className="preview-img" src={img} alt={selected?.name} />
+        {previewImg
+          ? <img className="preview-img" src={previewImg} alt={selectedCard?.name} />
           : <div className="preview-placeholder">
-              <span>Select a card<br />to preview</span>
+              <span>Select a printing<br />to preview</span>
             </div>
         }
       </div>
