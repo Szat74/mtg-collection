@@ -333,7 +333,7 @@ app.get('/api/stats', (req, res) => {
   const totals = db.prepare(`
     SELECT
       SUM(quantity)                                        AS total,
-      COUNT(*)                                             AS unique,
+      COUNT(*)                                             AS unique_count,
       SUM(CASE WHEN foil = 1 THEN quantity ELSE 0 END)    AS foils
     FROM collection
   `).get();
@@ -352,7 +352,7 @@ app.get('/api/stats', (req, res) => {
     ORDER BY n DESC
   `).all();
 
-  res.json({ ...totals, byRarity, byDeck });
+  res.json({ ...totals, unique: totals.unique_count, byRarity, byDeck });
 });
 
 // ── Decks ─────────────────────────────────────────────────────────────────────
