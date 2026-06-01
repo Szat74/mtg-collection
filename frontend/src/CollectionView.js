@@ -37,20 +37,22 @@ function CardTile({ card, decks, groups, onUpdate, onDelete }) {
     onDelete(card.id);
   };
 
-  const imgSrc = flipped && card.image_back ? card.image_back : card.image_uri;
-  const price  = card.prices_usd ? `$${parseFloat(card.prices_usd).toFixed(2)}` : null;
+  const isFoil  = !!card.foil;
+  const hasBack = !!card.image_back;
+  const imgSrc  = flipped && hasBack ? card.image_back : card.image_uri;
+  const price   = card.prices_usd ? `$${parseFloat(card.prices_usd).toFixed(2)}` : null;
 
   return (
-    <div className={`card-tile ${card.foil ? 'foil' : ''}`}>
-      <div className="card-img-wrap" onClick={() => card.image_back && setFlipped(f => !f)}>
+    <div className={`card-tile ${isFoil ? 'foil' : ''}`}>
+      <div className="card-img-wrap" onClick={() => hasBack && setFlipped(f => !f)}>
         {imgSrc
           ? <img src={imgSrc} alt={card.name} loading="lazy" />
           : <div className="card-no-img">{card.name}</div>
         }
-        {card.image_back && <span className="flip-hint">↻</span>}
-        {card.foil && <span className="foil-badge">✦ Foil</span>}
-        {price && <span className="price-badge">{price}</span>}
+        {hasBack && <span className="flip-hint">↻</span>}
+        {isFoil && <span className="foil-badge">✦ Foil</span>}
       </div>
+      {price && <div className="price-badge">{price}</div>}
       <div className="card-info">
         <div className="card-name">{card.name}</div>
         <div className="card-meta">
