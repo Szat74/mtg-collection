@@ -5,17 +5,18 @@ const API = '/api';
 export default function AddCardView({ decks, groups, refresh, showToast, setView }) {
   const [query, setQuery]           = useState('');
   const [results, setResults]       = useState([]);
-  const [selectedName, setSelectedName] = useState(null);   // card name chosen from search
-  const [printings, setPrintings]   = useState([]);          // all versions of that name
   const [loadingSearch, setLoadingSearch] = useState(false);
   const [loadingPrints, setLoadingPrints] = useState(false);
-  const [selectedCard, setSelectedCard]   = useState(null);  // specific printing chosen
+
+  const [selectedName, setSelectedName] = useState(null);
+  const [printings, setPrintings]       = useState([]);
+  const [selectedCard, setSelectedCard] = useState(null);
 
   // Add-form state
-  const [qty, setQty]         = useState(1);
-  const [foil, setFoil]       = useState(false);
+  const [qty, setQty]           = useState(1);
+  const [foil, setFoil]         = useState(false);
   const [selDecks, setSelDecks] = useState([]);
-  const [newDeck, setNewDeck] = useState('');
+  const [newDeck, setNewDeck]   = useState('');
   const [selGroups, setSelGroups] = useState([]);
 
   const debounce = useRef(null);
@@ -42,7 +43,7 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
     debounce.current = setTimeout(() => searchByName(v), 400);
   };
 
-  // ── Step 2: load all printings for the chosen name ─────────────────────────
+  // ── Step 2: load all printings for chosen name ─────────────────────────────
   const selectName = async (card) => {
     setSelectedName(card.name);
     setResults([]);
@@ -52,22 +53,17 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
     try {
       const res  = await fetch(`${API}/printings/${encodeURIComponent(card.name)}`);
       const data = await res.json();
-      setPrintings(data.data || []);
+      const prints = data.data || [];
+      setPrintings(prints);
+      // Auto-select first printing
+      if (prints.length > 0) setSelectedCard(prints[0]);
     } catch { setPrintings([]); showToast('Could not load printings', 'error'); }
     setLoadingPrints(false);
   };
 
-  // ── Step 3: pick a specific printing ──────────────────────────────────────
-  const selectPrinting = (card) => {
-    setSelectedCard(card);
-  };
-
-  // ── Deck multi-select helpers ──────────────────────────────────────────────
-  const toggleDeck = (d) =>
-    setSelDecks(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]);
-
-  const toggleGroup = (g) =>
-    setSelGroups(prev => prev.includes(g) ? prev.filter(x => x !== g) : [...prev, g]);
+  // ── Deck / group helpers ───────────────────────────────────────────────────
+  const toggleDeck  = (d) => setSelDecks(prev  => prev.includes(d)  ? prev.filter(x => x !== d)  : [...prev, d]);
+  const toggleGroup = (g) => setSelGroups(prev => prev.includes(g) ? prev.filter(x => x !== g) : [...prev, g]);
 
   // ── Add to collection ──────────────────────────────────────────────────────
   const addCard = async () => {
@@ -91,7 +87,6 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
     if (res.ok) {
       showToast(`Added ${selectedCard.name} ×${qty}${foil ? ' (foil)' : ''}`);
       refresh();
-      // Reset everything
       setQuery(''); setSelectedName(null); setSelectedCard(null); setPrintings([]);
       setQty(1); setFoil(false); setSelDecks([]); setNewDeck(''); setSelGroups([]);
     } else {
@@ -103,12 +98,21 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
     ? (selectedCard.image_uris?.normal ?? selectedCard.card_faces?.[0]?.image_uris?.normal)
     : null;
 
+  // Build dropdown label for a printing
+  const printingLabel = (card) => {
+    const set   = card.set_name || card.set || '?';
+    const code  = (card.set || '???').toUpperCase();
+    const num   = card.collector_number ? `#${card.collector_number}` : '';
+    const price = card.prices?.usd ? ` · $${parseFloat(card.prices.usd).toFixed(2)}` : '';
+    return `${set} (${code}) ${num}${price}`;
+  };
+
   return (
     <div className="add-view">
       <div className="add-left">
         <h2 className="section-title">Add a Card</h2>
 
-        {/* ── Step 1: name search ── */}
+        {/* ── Name search ── */}
         <div className="search-block">
           <input
             className="search-input"
@@ -134,50 +138,34 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
           )}
         </div>
 
-        {/* ── Step 2: version picker ── */}
+        {/* ── Add form (shown once a name is selected) ── */}
         {selectedName && (
-          <div className="version-picker">
-            <div className="version-picker-title">
-              Select printing of <strong>{selectedName}</strong>
-            </div>
-            {loadingPrints && <div className="searching">Loading printings…</div>}
-            {!loadingPrints && printings.length === 0 && (
-              <div className="searching">No printings found.</div>
-            )}
-            <div className="printings-grid">
-              {printings.map(card => {
-                const img = card.image_uris?.normal ?? card.card_faces?.[0]?.image_uris?.normal;
-                const price = card.prices?.usd ? `$${parseFloat(card.prices.usd).toFixed(2)}` : '—';
-                const isSelected = selectedCard?.id === card.id;
-                return (
-                  <div
-                    key={card.id}
-                    className={`printing-card ${isSelected ? 'selected' : ''}`}
-                    onClick={() => selectPrinting(card)}
-                  >
-                    {img && <img src={img} alt={card.name} loading="lazy" />}
-                    <div className="printing-info">
-                      <span className="printing-set">{card.set_name}</span>
-                      <span className="printing-num">#{card.collector_number}</span>
-                      <span className="printing-price">{price}</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* ── Step 3: add form ── */}
-        {selectedCard && (
           <div className="add-form">
             <div className="selected-name">
-              <strong>{selectedCard.name}</strong>
-              &nbsp;— {selectedCard.set_name} #{selectedCard.collector_number}
-              {selectedCard.prices?.usd && (
-                <span className="selected-price">&nbsp;· ${parseFloat(selectedCard.prices.usd).toFixed(2)}</span>
-              )}
+              Selected: <strong>{selectedName}</strong>
             </div>
+
+            {/* Set / version dropdown */}
+            <label>Set
+              {loadingPrints
+                ? <div className="searching">Loading printings…</div>
+                : (
+                  <select
+                    value={selectedCard?.id || ''}
+                    onChange={e => {
+                      const card = printings.find(p => p.id === e.target.value);
+                      if (card) setSelectedCard(card);
+                    }}
+                  >
+                    {printings.map(card => (
+                      <option key={card.id} value={card.id}>
+                        {printingLabel(card)}
+                      </option>
+                    ))}
+                  </select>
+                )
+              }
+            </label>
 
             <div className="form-row">
               <label>Quantity
@@ -194,8 +182,7 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
             <div className="multi-select-list">
               {decks.map(d => (
                 <label key={d} className="multi-select-item">
-                  <input type="checkbox" checked={selDecks.includes(d)}
-                    onChange={() => toggleDeck(d)} />
+                  <input type="checkbox" checked={selDecks.includes(d)} onChange={() => toggleDeck(d)} />
                   {d}
                 </label>
               ))}
@@ -211,8 +198,7 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
             <div className="multi-select-list">
               {(groups || []).map(g => (
                 <label key={g} className="multi-select-item">
-                  <input type="checkbox" checked={selGroups.includes(g)}
-                    onChange={() => toggleGroup(g)} />
+                  <input type="checkbox" checked={selGroups.includes(g)} onChange={() => toggleGroup(g)} />
                   {g}
                 </label>
               ))}
@@ -225,11 +211,12 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
         )}
       </div>
 
+      {/* ── Right panel: card image ── */}
       <div className="add-right">
         {previewImg
           ? <img className="preview-img" src={previewImg} alt={selectedCard?.name} />
           : <div className="preview-placeholder">
-              <span>Select a printing<br />to preview</span>
+              <span>Select a card<br />to preview</span>
             </div>
         }
       </div>
