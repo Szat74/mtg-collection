@@ -330,17 +330,29 @@ app.delete('/api/cards/:id', (req, res) => {
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
 app.get('/api/stats', (req, res) => {
-  const stats = db.prepare(`
+  const totals = db.prepare(`
     SELECT
-      COUNT(*)                                  AS total_entries,
-      SUM(quantity)                             AS total_cards,
-      SUM(foil)                                 AS foil_cards,
-      COUNT(DISTINCT deck)                      AS deck_count,
-      SUM(quantity * COALESCE(prices_usd, 0))   AS estimated_value
+      SUM(quantity)                                        AS total,
+      COUNT(*)                                             AS unique,
+      SUM(CASE WHEN foil = 1 THEN quantity ELSE 0 END)    AS foils
     FROM collection
   `).get();
-  const cacheSize = db.prepare('SELECT COUNT(*) AS n FROM card_cache').get();
-  res.json({ ...stats, cache_size: cacheSize.n });
+
+  const byRarity = db.prepare(`
+    SELECT COALESCE(rarity, 'unknown') AS rarity, SUM(quantity) AS n
+    FROM collection
+    GROUP BY rarity
+    ORDER BY rarity
+  `).all();
+
+  const byDeck = db.prepare(`
+    SELECT COALESCE(deck, 'Unassigned') AS deck, SUM(quantity) AS n
+    FROM collection
+    GROUP BY deck
+    ORDER BY n DESC
+  `).all();
+
+  res.json({ ...totals, byRarity, byDeck });
 });
 
 // ── Decks ─────────────────────────────────────────────────────────────────────
