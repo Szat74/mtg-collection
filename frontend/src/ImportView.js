@@ -5,8 +5,8 @@ const API = '/api';
 const EXAMPLE = `4 Lightning Bolt
 2 foil Black Lotus
 1 Counterspell | Control Deck
-3 Llanowar Elves | Elf Tribal
-2 foil Thoughtseize | Midrange`;
+3 Llanowar Elves (LEA) 184
+2 foil Thoughtseize (LRW) 145 | Midrange`;
 
 export default function ImportView({ decks, refresh, showToast, setView }) {
   const [text, setText] = useState('');
@@ -44,6 +44,7 @@ export default function ImportView({ decks, refresh, showToast, setView }) {
         <code>Card Name</code> &nbsp;|&nbsp;
         <code>4 Card Name</code> &nbsp;|&nbsp;
         <code>2 foil Card Name</code> &nbsp;|&nbsp;
+        <code>1 Card Name (SET) 000</code> &nbsp;|&nbsp;
         <code>1 Card Name | Deck Name</code>
       </p>
 
@@ -93,6 +94,7 @@ export default function ImportView({ decks, refresh, showToast, setView }) {
           {!results && (
             <div className="import-preview-hint">
               <p>Fuzzy name matching — "lightning bolt" works fine.</p>
+              <p>Pinpoint a printing with <code>(SET) collector_number</code> — e.g. <code>Lightning Bolt (M11) 149</code>.</p>
               <p>Deck can be set per-line with <code>| Deck Name</code> or globally via the dropdown.</p>
               <p>Foil prefix: <code>foil Card Name</code></p>
             </div>

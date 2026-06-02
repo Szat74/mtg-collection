@@ -504,17 +504,34 @@ app.post('/api/import', (req, res) => {
   for (const line of lines) {
     try {
       const [cardPart, deckPart] = line.split('|').map(s => s.trim());
-      const match = cardPart.match(/^(\d+)?\s*(foil\s+)?(.+)$/i);
+      // Format: [qty] [foil] Card Name [(SET) [collector_number]]
+      const match = cardPart.match(/^(\d+)?\s*(foil\s+)?(.+?)(?:\s+\(([A-Za-z0-9]+)\)(?:\s+(\S+))?)?$/i);
       if (!match) throw new Error('Could not parse line');
 
-      const quantity = parseInt(match[1] || '1', 10);
-      const foil     = !!match[2];
-      const name     = match[3].trim();
-      const deck     = deckPart || globalDeck;
+      const quantity        = parseInt(match[1] || '1', 10);
+      const foil            = !!match[2];
+      const name            = match[3].trim();
+      const setCode         = match[4]?.toLowerCase() ?? null;
+      const collectorNumber = match[5] ?? null;
+      const deck            = deckPart || globalDeck;
 
-      const cached = db.prepare(
-        'SELECT * FROM card_cache WHERE lower(name) = lower(?) LIMIT 1'
-      ).get(name);
+      // Prefer exact set+collector_number lookup, fall back to name-only
+      let cached = null;
+      if (setCode && collectorNumber) {
+        cached = db.prepare(
+          'SELECT * FROM card_cache WHERE lower(set_code) = lower(?) AND collector_number = ? LIMIT 1'
+        ).get(setCode, collectorNumber);
+      }
+      if (!cached && setCode) {
+        cached = db.prepare(
+          'SELECT * FROM card_cache WHERE lower(name) = lower(?) AND lower(set_code) = lower(?) LIMIT 1'
+        ).get(name, setCode);
+      }
+      if (!cached) {
+        cached = db.prepare(
+          'SELECT * FROM card_cache WHERE lower(name) = lower(?) LIMIT 1'
+        ).get(name);
+      }
 
       const result = insertStmt.run({
         name,
