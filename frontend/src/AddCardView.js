@@ -18,6 +18,7 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
   const [selDecks, setSelDecks] = useState([]);
   const [newDeck, setNewDeck]   = useState('');
   const [selGroups, setSelGroups] = useState([]);
+  const [newGroup, setNewGroup]   = useState('');
 
   const debounce = useRef(null);
 
@@ -71,7 +72,9 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
     const finalDecks = newDeck.trim()
       ? [...new Set([...selDecks, newDeck.trim()])]
       : selDecks;
-
+    const finalGroups = newGroup.trim()
+      ? [...new Set([...selGroups, newGroup.trim()])]
+      : selGroups;
     const res = await fetch(`${API}/cards`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -80,7 +83,7 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
         quantity: qty,
         foil,
         decks: finalDecks,
-        groups: selGroups,
+        groups: finalGroups,
       }),
     });
 
@@ -203,6 +206,12 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
                 </label>
               ))}
             </div>
+            <input
+              className="new-group-input"
+              placeholder="+ New group name"
+              value={newGroup}
+              onChange={e => setNewGroup(e.target.value)}
+            />
 
             <button className="btn-primary btn-add" onClick={addCard}>
               Add to Collection

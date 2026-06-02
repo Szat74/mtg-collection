@@ -46,14 +46,9 @@ db.exec(`
     PRIMARY KEY (collection_id, deck)
   );
 
-  CREATE TABLE IF NOT EXISTS groups (
-    name        TEXT PRIMARY KEY,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
   CREATE TABLE IF NOT EXISTS collection_groups (
     collection_id INTEGER NOT NULL REFERENCES collection(id) ON DELETE CASCADE,
-    group_name    TEXT    NOT NULL REFERENCES groups(name) ON DELETE CASCADE,
+    group_name    TEXT    NOT NULL,
     PRIMARY KEY (collection_id, group_name)
   );
 
@@ -97,6 +92,9 @@ for (const sql of [
 ]) {
   try { db.exec(sql); } catch { /* column already exists */ }
 }
+
+// Drop legacy groups table — group names now live solely in collection_groups
+try { db.exec('DROP TABLE IF EXISTS groups'); } catch { /* ignore */ }
 
 // Backfill collection_decks from legacy deck column
 db.exec(`
@@ -281,7 +279,6 @@ const saveGroups = db.transaction((collectionId, groups) => {
   db.prepare('DELETE FROM collection_groups WHERE collection_id = ?').run(collectionId);
   for (const g of groups) {
     if (g && g.trim()) {
-      db.prepare('INSERT OR IGNORE INTO groups (name) VALUES (?)').run(g.trim());
       db.prepare('INSERT OR IGNORE INTO collection_groups (collection_id, group_name) VALUES (?, ?)').run(collectionId, g.trim());
     }
   }
@@ -483,19 +480,10 @@ app.get('/api/decks', (req, res) => {
 
 // ── Groups ────────────────────────────────────────────────────────────────────
 app.get('/api/groups', (req, res) => {
-  res.json(db.prepare('SELECT name FROM groups ORDER BY name').all().map(r => r.name));
-});
-
-app.post('/api/groups', (req, res) => {
-  const { name } = req.body;
-  if (!name?.trim()) return res.status(400).json({ error: 'name is required' });
-  db.prepare('INSERT OR IGNORE INTO groups (name) VALUES (?)').run(name.trim());
-  res.status(201).json({ name: name.trim() });
-});
-
-app.delete('/api/groups/:name', (req, res) => {
-  db.prepare('DELETE FROM groups WHERE name = ?').run(decodeURIComponent(req.params.name));
-  res.json({ ok: true });
+  const groups = db.prepare(
+    'SELECT DISTINCT group_name FROM collection_groups ORDER BY group_name'
+  ).all().map(r => r.group_name);
+  res.json(groups);
 });
 
 // ── Bulk import ───────────────────────────────────────────────────────────────

@@ -10,6 +10,7 @@ function CardTile({ card, decks, groups, onUpdate, onDelete }) {
   const [selDecks, setSelDecks]   = useState(card.decks || []);
   const [newDeck, setNewDeck]     = useState('');
   const [selGroups, setSelGroups] = useState(card.groups || []);
+  const [newGroup, setNewGroup]     = useState('');
   const [flipped, setFlipped]     = useState(false);
 
   const toggleDeck  = (d) => setSelDecks(prev => prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]);
@@ -19,13 +20,18 @@ function CardTile({ card, decks, groups, onUpdate, onDelete }) {
     const finalDecks = newDeck.trim()
       ? [...new Set([...selDecks, newDeck.trim()])]
       : selDecks;
+    const finalGroups = newGroup.trim()
+      ? [...new Set([...selGroups, newGroup.trim()])]
+      : selGroups;
     const res = await fetch(`${API}/cards/${card.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ quantity: parseInt(qty), foil, decks: finalDecks, groups: selGroups }),
+      body: JSON.stringify({ quantity: parseInt(qty), foil, decks: finalDecks, groups: finalGroups }),
     });
     const updated = await res.json();
     onUpdate(updated);
+    setSelGroups(updated.groups || []);
+    setNewGroup('');
     setSelDecks(updated.decks || []);
     setNewDeck('');
     setEditing(false);
@@ -118,6 +124,12 @@ function CardTile({ card, decks, groups, onUpdate, onDelete }) {
                 </label>
               ))}
             </div>
+            <input
+              className="new-group-input"
+              placeholder="+ New group name"
+              value={newGroup}
+              onChange={e => setNewGroup(e.target.value)}
+            />
 
             <div className="edit-btns">
               <button className="btn-sm btn-save" onClick={save}>Save</button>

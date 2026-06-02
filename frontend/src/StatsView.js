@@ -88,7 +88,7 @@ export default function StatsView({ stats }) {
                 </div>
               </div>
               <div className="bar-nums">
-                <span className="bar-num">{d.n}</span>
+                <span className="bar-num">{d.n} Card(s): </span>
                 <span className="bar-num bar-num-value">{fmt(d.value)}</span>
               </div>
             </div>
