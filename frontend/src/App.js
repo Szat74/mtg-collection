@@ -4,6 +4,7 @@ import CollectionView from './CollectionView';
 import AddCardView from './AddCardView';
 import ImportView from './ImportView';
 import StatsView from './StatsView';
+import { DeckManager } from './DeckManager';
 
 const API = '/api';
 
@@ -33,7 +34,8 @@ export default function App() {
 
   const fetchDecks = useCallback(async () => {
     const res = await fetch(`${API}/decks`);
-    setDecks(await res.json());
+    const data = await res.json();
+    setDecks(data.map(d => d.name));  // ← this line is critical
   }, []);
 
   const fetchGroups = useCallback(async () => {
@@ -82,10 +84,13 @@ export default function App() {
 
       <main className="app-main">
         {view === 'collection' && (
-          <CollectionView
-            cards={cards} decks={decks} groups={groups}
-            fetchCards={fetchCards} refresh={refresh} showToast={showToast}
-          />
+		  <>
+            <CollectionView
+              cards={cards} decks={decks} groups={groups}
+              fetchCards={fetchCards} refresh={refresh} showToast={showToast}
+            />
+            <DeckManager onDecksChanged={refresh} />
+          </>
         )}
         {view === 'add' && (
           <AddCardView
@@ -100,7 +105,6 @@ export default function App() {
           <StatsView stats={stats} />
         )}
       </main>
-
       {toast && <div className={`toast toast-${toast.type}`}>{toast.msg}</div>}
     </div>
   );
