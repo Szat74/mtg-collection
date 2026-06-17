@@ -42,6 +42,8 @@ db.exec(`
     colors           TEXT,
     rarity           TEXT,
     prices_usd       REAL,
+    prices_usd_foil  REAL,
+    prices_usd_etched REAL,
     added_at         TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -71,6 +73,8 @@ db.exec(`
     colors           TEXT,
     rarity           TEXT,
     prices_usd       REAL,
+    prices_usd_foil  REAL,
+    prices_usd_etched REAL,
     cached_at        TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -94,6 +98,11 @@ for (const sql of [
   'ALTER TABLE card_cache ADD COLUMN set_name         TEXT',
   'ALTER TABLE card_cache ADD COLUMN collector_number TEXT',
   'ALTER TABLE card_cache ADD COLUMN image_back       TEXT',
+  'ALTER TABLE collection ADD COLUMN prices_usd_foil   REAL',
+  'ALTER TABLE collection ADD COLUMN prices_usd_etched REAL',
+  'ALTER TABLE card_cache ADD COLUMN prices_usd_foil   REAL',
+  'ALTER TABLE card_cache ADD COLUMN prices_usd_etched REAL',
+  'ALTER TABLE card_cache ADD COLUMN foil_only INTEGER NOT NULL DEFAULT 0',
   // quantity column may still exist on old DBs — that's fine, we just ignore it
 ]) {
   try { db.exec(sql); } catch { /* column already exists */ }
@@ -180,20 +189,22 @@ async function refreshBulkCache() {
 
     console.log('[bulk] Downloading default_cards…');
     const upsert = db.prepare(`
-      INSERT INTO card_cache
-        (scryfall_id, name, set_code, set_name, collector_number, image_uri, image_back,
-         mana_cost, type_line, oracle_text, colors, rarity, prices_usd, cached_at)
-      VALUES
-        (@scryfall_id, @name, @set_code, @set_name, @collector_number, @image_uri, @image_back,
-         @mana_cost, @type_line, @oracle_text, @colors, @rarity, @prices_usd, datetime('now'))
-      ON CONFLICT(scryfall_id) DO UPDATE SET
-        name=excluded.name, set_code=excluded.set_code, set_name=excluded.set_name,
-        collector_number=excluded.collector_number,
-        image_uri=excluded.image_uri, image_back=excluded.image_back,
-        mana_cost=excluded.mana_cost, type_line=excluded.type_line,
-        oracle_text=excluded.oracle_text, colors=excluded.colors,
-        rarity=excluded.rarity, prices_usd=excluded.prices_usd, cached_at=excluded.cached_at
-    `);
+	  INSERT INTO card_cache
+		(scryfall_id, name, set_code, set_name, collector_number, image_uri, image_back,
+		 mana_cost, type_line, oracle_text, colors, rarity, prices_usd, prices_usd_foil, prices_usd_etched, foil_only, cached_at)
+	  VALUES
+		(@scryfall_id, @name, @set_code, @set_name, @collector_number, @image_uri, @image_back,
+		 @mana_cost, @type_line, @oracle_text, @colors, @rarity, @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, datetime('now'))
+	  ON CONFLICT(scryfall_id) DO UPDATE SET
+		name=excluded.name, set_code=excluded.set_code, set_name=excluded.set_name,
+		collector_number=excluded.collector_number,
+		image_uri=excluded.image_uri, image_back=excluded.image_back,
+		mana_cost=excluded.mana_cost, type_line=excluded.type_line,
+		oracle_text=excluded.oracle_text, colors=excluded.colors,
+		rarity=excluded.rarity, prices_usd=excluded.prices_usd, prices_usd_foil=excluded.prices_usd_foil, 
+		prices_usd_etched=excluded.prices_usd_etched, foil_only=excluded.foil_only,
+		cached_at=excluded.cached_at
+	`);
     const flushBatch = db.transaction((rows) => { for (const r of rows) upsert.run(r); });
 
     let total = 0;
@@ -210,6 +221,24 @@ async function refreshBulkCache() {
   }
 }
 
+// Raw Scryfall prices object → flat DB fields
+function parsePrices(prices = {}) {
+  return {
+    prices_usd:        prices.usd        ? parseFloat(prices.usd)        : null,
+    prices_usd_foil:   prices.usd_foil   ? parseFloat(prices.usd_foil)   : null,
+    prices_usd_etched: prices.usd_etched ? parseFloat(prices.usd_etched) : null,
+  };
+}
+
+// Flat DB fields → Scryfall-shaped prices object
+function formatPrices(row) {
+  return {
+    usd:        row.prices_usd        != null ? String(row.prices_usd)        : null,
+    usd_foil:   row.prices_usd_foil   != null ? String(row.prices_usd_foil)   : null,
+    usd_etched: row.prices_usd_etched != null ? String(row.prices_usd_etched) : null,
+  };
+}
+
 function cardToRow(c) {
   return {
     scryfall_id:      c.id,
@@ -224,7 +253,8 @@ function cardToRow(c) {
     oracle_text:      c.oracle_text  ?? null,
     colors:           c.colors       ? JSON.stringify(c.colors) : null,
     rarity:           c.rarity       ?? null,
-    prices_usd:       c.prices?.usd  ? parseFloat(c.prices.usd) : null,
+    ...parsePrices(c.prices),
+	foil_only: (c.foil === true && c.nonfoil === false) ? 1 : 0,
   };
 }
 
@@ -276,7 +306,7 @@ function cacheRowToScryfall(c) {
     oracle_text:      c.oracle_text,
     colors:           c.colors ? JSON.parse(c.colors) : [],
     rarity:           c.rarity,
-    prices:           { usd: c.prices_usd != null ? String(c.prices_usd) : null },
+    prices:           formatPrices(c),
   };
 }
 
@@ -296,7 +326,7 @@ function scryfallCardToRow(card, { foil, deck }) {
     oracle_text:      card.oracle_text  ?? null,
     colors:           card.colors       ? JSON.stringify(card.colors) : null,
     rarity:           card.rarity       ?? null,
-    prices_usd:       card.prices?.usd  ? parseFloat(card.prices.usd) : null,
+    ...parsePrices(card.prices),
   };
 }
 
@@ -465,12 +495,14 @@ app.post('/api/cards', (req, res) => {
 
   const row = scryfallCardToRow(scryfall_card, { foil, deck });
   const result = db.prepare(`
-    INSERT INTO collection
-      (name, set_code, set_name, collector_number, foil, deck, scryfall_id,
-       image_uri, image_back, mana_cost, type_line, oracle_text, colors, rarity, prices_usd)
-    VALUES
-      (@name, @set_code, @set_name, @collector_number, @foil, @deck, @scryfall_id,
-       @image_uri, @image_back, @mana_cost, @type_line, @oracle_text, @colors, @rarity, @prices_usd)
+        INSERT INTO collection
+          (name, set_code, set_name, collector_number, foil, deck, scryfall_id,
+           image_uri, image_back, mana_cost, type_line, oracle_text, colors, rarity,
+           prices_usd, prices_usd_foil, prices_usd_etched)
+        VALUES
+          (@name, @set_code, @set_name, @collector_number, @foil, @deck, @scryfall_id,
+           @image_uri, @image_back, @mana_cost, @type_line, @oracle_text, @colors, @rarity,
+           @prices_usd, @prices_usd_foil, @prices_usd_etched)
   `).run(row);
 
   const id = result.lastInsertRowid;
@@ -488,12 +520,14 @@ app.post('/api/cards/copies', (req, res) => {
 
   const row = scryfallCardToRow(scryfall_card, { foil, deck: null });
   const insertStmt = db.prepare(`
-    INSERT INTO collection
-      (name, set_code, set_name, collector_number, foil, deck, scryfall_id,
-       image_uri, image_back, mana_cost, type_line, oracle_text, colors, rarity, prices_usd)
-    VALUES
-      (@name, @set_code, @set_name, @collector_number, @foil, @deck, @scryfall_id,
-       @image_uri, @image_back, @mana_cost, @type_line, @oracle_text, @colors, @rarity, @prices_usd)
+        INSERT INTO collection
+          (name, set_code, set_name, collector_number, foil, deck, scryfall_id,
+           image_uri, image_back, mana_cost, type_line, oracle_text, colors, rarity,
+           prices_usd, prices_usd_foil, prices_usd_etched)
+        VALUES
+          (@name, @set_code, @set_name, @collector_number, @foil, @deck, @scryfall_id,
+           @image_uri, @image_back, @mana_cost, @type_line, @oracle_text, @colors, @rarity,
+           @prices_usd, @prices_usd_foil, @prices_usd_etched)
   `);
 
   const ids = db.transaction(() => {
@@ -639,22 +673,24 @@ app.post('/api/import', (req, res) => {
   const added = [], failed = [];
 
   const insertStmt = db.prepare(`
-    INSERT INTO collection
-      (name, set_code, set_name, collector_number, foil, deck, scryfall_id,
-       image_uri, image_back, mana_cost, type_line, oracle_text, colors, rarity, prices_usd)
-    VALUES
-      (@name, @set_code, @set_name, @collector_number, @foil, @deck, @scryfall_id,
-       @image_uri, @image_back, @mana_cost, @type_line, @oracle_text, @colors, @rarity, @prices_usd)
+        INSERT INTO collection
+          (name, set_code, set_name, collector_number, foil, deck, scryfall_id,
+           image_uri, image_back, mana_cost, type_line, oracle_text, colors, rarity,
+           prices_usd, prices_usd_foil, prices_usd_etched)
+        VALUES
+          (@name, @set_code, @set_name, @collector_number, @foil, @deck, @scryfall_id,
+           @image_uri, @image_back, @mana_cost, @type_line, @oracle_text, @colors, @rarity,
+           @prices_usd, @prices_usd_foil, @prices_usd_etched)
   `);
 
   for (const line of lines) {
     try {
       const [cardPart, deckPart] = line.split('|').map(s => s.trim());
-      const match = cardPart.match(/^(\d+)?\s*(foil\s+)?(.+?)(?:\s+\(([A-Za-z0-9]+)\)(?:\s+(\S+))?)?$/i);
+      const match = cardPart.match(/^(\d+)?\s*(foil\s+)?(.+?)(?:\s+\(([A-Za-z0-9]+)\)(?:\s+(\S+?))?)?(?:\s+\*F\*)?$/i);
       if (!match) throw new Error('Could not parse line');
 
       const quantity        = parseInt(match[1] || '1', 10);
-      const foil            = !!match[2];
+      const foil            = !!match[2] || /\*F\*$/i.test(cardPart);
       const name            = match[3].trim();
       const setCode         = match[4]?.toLowerCase() ?? null;
       const collectorNumber = match[5] ?? null;
@@ -670,7 +706,13 @@ app.post('/api/import', (req, res) => {
       if (!cached) {
         cached = db.prepare('SELECT * FROM card_cache WHERE lower(name) = lower(?) LIMIT 1').get(name);
       }
-
+	// Auto-detect foil-only printings
+	if (cached && cached.foil_only) {
+	  baseRow.foil = 1;
+	}
+	if (cached?.foil_only) {
+  baseRow.foil = 1;
+}
       const baseRow = {
         name,
         set_code:         cached?.set_code         ?? null,
@@ -687,6 +729,8 @@ app.post('/api/import', (req, res) => {
         colors:           cached?.colors           ?? null,
         rarity:           cached?.rarity           ?? null,
         prices_usd:       cached?.prices_usd       ?? null,
+        prices_usd_foil:  cached?.prices_usd_foil  ?? null,
+        prices_usd_etched: cached?.prices_usd_etched ?? null,
       };
 
       // Insert one row per physical copy
