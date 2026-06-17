@@ -24,7 +24,6 @@ function CopyRow({ copy, index, decks, onChange }) {
 function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode, selected, onSelect }) {
   const [editing, setEditing]     = useState(false);
   const [foil, setFoil]           = useState(!!card.foil);
-  // copies: array of { id, decks: [string|none] }
   const [copies, setCopies]       = useState(card.copies || []);
   const [selGroups, setSelGroups] = useState(card.groups || []);
   const [newGroup, setNewGroup]   = useState('');
@@ -47,7 +46,6 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
       ? [...new Set([...selGroups, newGroup.trim()])]
       : selGroups;
 
-    // Patch each copy: update its deck and groups
     const updated = await Promise.all(copies.map(copy =>
       fetch(`${API}/cards/${copy.id}`, {
         method: 'PATCH',
@@ -73,9 +71,7 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
   };
 
   const delOneCopy = async () => {
-    //Early break if copies = 1
     if (copies.length === 1) return;
-    // Delete the last unassigned copy first, otherwise any copy
     const unassigned = copies.find(c => !c.decks?.length);
     const target = unassigned || copies[copies.length - 1];
     await fetch(`${API}/cards/${target.id}`, { method: 'DELETE' });
@@ -85,7 +81,12 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
   const isFoil  = !!card.foil;
   const hasBack = !!card.image_back;
   const imgSrc  = flipped && hasBack ? card.image_back : card.image_uri;
-  const price   = card.prices_usd ? `$${parseFloat(card.prices_usd).toFixed(2)}` : null;
+
+  // Use foil price when foil, fall back gracefully for foil-only cards
+  const rawPrice = isFoil
+    ? (card.prices_usd_foil ?? card.prices_usd_etched ?? card.prices_usd)
+    : (card.prices_usd ?? card.prices_usd_foil ?? card.prices_usd_etched);
+  const price = rawPrice ? `$${parseFloat(rawPrice).toFixed(2)}` : null;
 
   // Summarise deck assignments for badge display
   const deckCounts = {};
@@ -126,7 +127,7 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
         </div>
         <div className="card-sub">{card.type_line}</div>
 
-        {/* Deck badges — show deck + copy count if >1 */}
+        {/* Deck badges */}
         {Object.keys(deckCounts).length > 0 && (
           <div className="card-badges">
             {Object.entries(deckCounts).map(([d, n]) => (
@@ -174,7 +175,6 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
               ))}
             </div>
 
-
             <label>Groups</label>
             <div className="multi-select-list">
               {(groups || []).map(g => (
@@ -215,7 +215,7 @@ export default function CollectionView({ cards: initialCards, decks, groups, fet
 
   // Bulk-edit state
   const [bulkMode, setBulkMode]           = useState(false);
-  const [selectedIds, setSelectedIds]     = useState(new Set()); // set of individual row ids
+  const [selectedIds, setSelectedIds]     = useState(new Set());
   const [bulkDeck, setBulkDeck]           = useState('');
   const [newBulkDeck, setNewBulkDeck]     = useState('');
   const [bulkGroup, setBulkGroup]         = useState('');
@@ -238,7 +238,6 @@ export default function CollectionView({ cards: initialCards, decks, groups, fet
 
   useEffect(() => { applyFilters(); }, [search, filterDeck, filterGroup, filterFoil, filterColors, sort, order]);
 
-  // onUpdate receives an array of patched individual rows; re-merge into grouped cards
   const handleUpdate = (updatedRows) => {
     setCards(prev => {
       const rowMap = Object.fromEntries(updatedRows.map(r => [r.id, r]));
@@ -252,7 +251,6 @@ export default function CollectionView({ cards: initialCards, decks, groups, fet
     refresh();
   };
 
-  // onDelete receives array of deleted ids
   const handleDelete = (deletedIds) => {
     const delSet = new Set(deletedIds);
     setCards(prev => {
@@ -280,7 +278,11 @@ export default function CollectionView({ cards: initialCards, decks, groups, fet
       oracle_text: card.oracle_text,
       colors: card.colors ? JSON.parse(card.colors) : [],
       rarity: card.rarity,
-      prices: { usd: card.prices_usd != null ? String(card.prices_usd) : null },
+      prices: {
+        usd:        card.prices_usd        != null ? String(card.prices_usd)        : null,
+        usd_foil:   card.prices_usd_foil   != null ? String(card.prices_usd_foil)   : null,
+        usd_etched: card.prices_usd_etched != null ? String(card.prices_usd_etched) : null,
+      },
     };
     const res = await fetch(`${API}/cards/copies`, {
       method: 'POST',
@@ -302,7 +304,6 @@ export default function CollectionView({ cards: initialCards, decks, groups, fet
     refresh();
   };
 
-  // Bulk: selectedIds is a flat set of individual row ids
   const toggleSelectGroup = (ids) => {
     setSelectedIds(prev => {
       const next = new Set(prev);
@@ -358,7 +359,6 @@ export default function CollectionView({ cards: initialCards, decks, groups, fet
     const group = bulkGroup === '__new__' ? newBulkGroup.trim() : bulkGroup;
     if (!group || !selectedIds.size) return;
     setBulkBusy(true);
-    // For groups we merge rather than replace
     const allRows = cards.flatMap(c => c.copies);
     const updated = await Promise.all([...selectedIds].map(id => {
       const copy = allRows.find(c => c.id === id);

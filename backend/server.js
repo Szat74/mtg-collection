@@ -571,7 +571,10 @@ app.get('/api/stats', (req, res) => {
       COUNT(*)                                          AS total,
       COUNT(DISTINCT name || COALESCE(set_code,'') || COALESCE(collector_number,'')) AS unique_count,
       SUM(CASE WHEN foil = 1 THEN 1 ELSE 0 END)        AS foils,
-      SUM(COALESCE(prices_usd, 0))                      AS total_value
+      SUM(CASE WHEN foil = 1
+         THEN COALESCE(prices_usd_foil, prices_usd_etched, prices_usd, 0)
+         ELSE COALESCE(prices_usd, 0)
+       END) AS total_value
     FROM collection
   `).get();
 

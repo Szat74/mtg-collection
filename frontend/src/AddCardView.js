@@ -13,10 +13,10 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
   const [selectedCard, setSelectedCard] = useState(null);
 
   // Add-form state
-  const [qty, setQty]           = useState(1);
-  const [foil, setFoil]         = useState(false);
-  const [selDecks, setSelDecks] = useState([]);
-  const [newDeck, setNewDeck]   = useState('');
+  const [qty, setQty]             = useState(1);
+  const [foil, setFoil]           = useState(false);
+  const [selDecks, setSelDecks]   = useState([]);
+  const [newDeck, setNewDeck]     = useState('');
   const [selGroups, setSelGroups] = useState([]);
   const [newGroup, setNewGroup]   = useState('');
 
@@ -44,6 +44,14 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
     debounce.current = setTimeout(() => searchByName(v), 400);
   };
 
+  // Auto-enable foil for foil-only printings
+  const selectCard = (card) => {
+    setSelectedCard(card);
+    if (!card.prices?.usd && (card.prices?.usd_foil || card.prices?.usd_etched)) {
+      setFoil(true);
+    }
+  };
+
   // ── Step 2: load all printings for chosen name ─────────────────────────────
   const selectName = async (card) => {
     setSelectedName(card.name);
@@ -52,12 +60,12 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
     setSelectedCard(null);
     setLoadingPrints(true);
     try {
-      const res  = await fetch(`${API}/printings/${encodeURIComponent(card.name)}`);
-      const data = await res.json();
+      const res    = await fetch(`${API}/printings/${encodeURIComponent(card.name)}`);
+      const data   = await res.json();
       const prints = data.data || [];
       setPrintings(prints);
       // Auto-select first printing
-      if (prints.length > 0) setSelectedCard(prints[0]);
+      if (prints.length > 0) selectCard(prints[0]);
     } catch { setPrintings([]); showToast('Could not load printings', 'error'); }
     setLoadingPrints(false);
   };
@@ -101,14 +109,19 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
     ? (selectedCard.image_uris?.normal ?? selectedCard.card_faces?.[0]?.image_uris?.normal)
     : null;
 
-  // Build dropdown label for a printing
-  const printingLabel = (card) => {
-    const set   = card.set_name || card.set || '?';
-    const code  = (card.set || '???').toUpperCase();
-    const num   = card.collector_number ? `#${card.collector_number}` : '';
-    const price = card.prices?.usd ? ` · $${parseFloat(card.prices.usd).toFixed(2)}` : '';
-    return `${set} (${code}) ${num}${price}`;
-  };
+  // Build dropdown label for a printing — uses foil price when foil is checked
+	const printingLabel = (card) => {
+	  const set      = card.set_name || card.set || '?';
+	  const code     = (card.set || '???').toUpperCase();
+	  const num      = card.collector_number ? `#${card.collector_number}` : '';
+	  const rawPrice = foil
+		? (card.prices?.usd_foil ?? card.prices?.usd_etched ?? card.prices?.usd)
+		: (card.prices?.usd ?? card.prices?.usd_foil ?? card.prices?.usd_etched);
+	  const priceStr = rawPrice ? ` · $${parseFloat(rawPrice).toFixed(2)}` : '';
+	  // Hint the user if this printing is foil-only
+	  const foilHint = (!card.prices?.usd && (card.prices?.usd_foil || card.prices?.usd_etched)) ? ' ✦' : '';
+	  return `${set} (${code}) ${num}${priceStr}${foilHint}`;
+	};
 
   return (
     <div className="add-view">
@@ -157,7 +170,7 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
                     value={selectedCard?.id || ''}
                     onChange={e => {
                       const card = printings.find(p => p.id === e.target.value);
-                      if (card) setSelectedCard(card);
+                      if (card) selectCard(card);
                     }}
                   >
                     {printings.map(card => (
