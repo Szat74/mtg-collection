@@ -56,6 +56,84 @@ function ColorPicker({ value, onChange }) {
   );
 }
 
+// ── Commander picker (inside DeckRow for commander-format decks) ──────────────
+function CommanderPicker({ deck, onSave }) {
+  const [open, setOpen]         = useState(false);
+  const [query, setQuery]       = useState('');
+  const [legendaries, setLegendaries] = useState([]);
+  const [loading, setLoading]   = useState(false);
+
+  const loadLegendaries = async () => {
+    setLoading(true);
+    try {
+      const res  = await fetch(`${API}/cards?deck=${deck.id}`);
+      const data = await res.json();
+      setLegendaries(data.filter(c => c.type_line?.includes('Legendary')));
+    } catch { setLegendaries([]); }
+    setLoading(false);
+  };
+
+  const openPicker = () => { setOpen(true); setQuery(''); loadLegendaries(); };
+  const close      = () => { setOpen(false); setQuery(''); };
+
+  const pick = (card) => {
+    // Use the first copy id as commander_id
+    onSave(deck.id, { commander_id: card.ids[0] });
+    close();
+  };
+
+  const clear = () => { onSave(deck.id, { commander_id: null }); };
+
+  const filtered = legendaries.filter(c =>
+    !query || c.name.toLowerCase().includes(query.toLowerCase())
+  );
+
+  return (
+    <div className="dm-commander-wrap">
+      <span className="dm-commander-label">Commander:</span>
+      {deck.commander_name
+        ? <>
+            <span className="dm-commander-name">{deck.commander_name}</span>
+            <button className="dm-btn dm-btn-ghost dm-btn-xs" onClick={openPicker} title="Change commander">✎</button>
+            <button className="dm-btn dm-btn-danger dm-btn-xs" onClick={clear} title="Remove commander">✕</button>
+          </>
+        : <button className="dm-btn dm-btn-ghost dm-btn-xs" onClick={openPicker}>Set commander…</button>
+      }
+      {open && (
+        <div className="dm-cmd-picker">
+          <div className="dm-cmd-picker-header">
+            <span>Pick a Legendary from this deck</span>
+            <button className="dm-close" onClick={close}>✕</button>
+          </div>
+          <input
+            className="dm-rename-input"
+            placeholder="Filter…"
+            value={query}
+            autoFocus
+            onChange={e => setQuery(e.target.value)}
+          />
+          <div className="dm-cmd-list">
+            {loading && <div className="dm-empty">Loading…</div>}
+            {!loading && filtered.length === 0 && (
+              <div className="dm-empty">
+                {legendaries.length === 0
+                  ? 'No Legendary cards in this deck yet'
+                  : 'No matches'}
+              </div>
+            )}
+            {filtered.map(c => (
+              <div key={c.ids[0]} className="dm-cmd-item" onClick={() => pick(c)}>
+                <span className="dm-cmd-item-name">{c.name}</span>
+                <span className="dm-cmd-item-type">{c.type_line}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Deck row (view mode) ──────────────────────────────────────────────────────
 function DeckRow({ deck, onSave, onDelete }) {
   const [editing, setEditing]       = useState(false);
@@ -143,6 +221,9 @@ function DeckRow({ deck, onSave, onDelete }) {
           <ColorPips colors={deck.colors} />
           {deck.description && <span className="dm-deck-desc">{deck.description}</span>}
         </div>
+        {deck.format === 'commander' && (
+          <CommanderPicker deck={deck} onSave={onSave} />
+        )}
       </div>
       <div className="dm-deck-right">
         <span className="dm-card-count">{deck.cardCount} cards</span>
@@ -236,7 +317,7 @@ export function DeckManager({ onDecksChanged }) {
       if (!res.ok) { showToast('Save failed'); return; }
       await loadDecks();
       onDecksChanged?.();
-      showToast(`Saved "${fields.name}"`);
+      showToast(fields.name ? `Saved "${fields.name}"` : 'Saved');
     } catch {
       showToast('Save failed');
     }
@@ -495,6 +576,38 @@ export function DeckManager({ onDecksChanged }) {
           75%  { opacity: 1 }
           100% { opacity: 0 }
         }
+
+        /* Commander picker */
+        .dm-commander-wrap {
+          display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+          margin-top: 4px; font-size: 11px;
+        }
+        .dm-commander-label { color: #666; flex-shrink: 0; }
+        .dm-commander-name { color: #c8b06a; font-style: italic; }
+        .dm-btn-xs { padding: 2px 6px; font-size: 10px; }
+        .dm-cmd-picker {
+          position: absolute; left: 10px; right: 10px; z-index: 1100;
+          background: #12121e; border: 1px solid #3a3a5c; border-radius: 10px;
+          box-shadow: 0 8px 32px rgba(0,0,0,0.7); padding: 12px;
+          display: flex; flex-direction: column; gap: 8px;
+        }
+        .dm-cmd-picker-header {
+          display: flex; justify-content: space-between; align-items: center;
+          font-size: 12px; color: #aaa;
+        }
+        .dm-cmd-list {
+          max-height: 160px; overflow-y: auto;
+          display: flex; flex-direction: column; gap: 2px;
+          scrollbar-width: thin; scrollbar-color: #2e2e4a #0e0e1a;
+        }
+        .dm-cmd-item {
+          padding: 6px 10px; border-radius: 6px; cursor: pointer;
+          display: flex; flex-direction: column; gap: 2px;
+          transition: background 0.12s;
+        }
+        .dm-cmd-item:hover { background: #1e1e32; }
+        .dm-cmd-item-name { color: #ddd; font-size: 13px; }
+        .dm-cmd-item-type { color: #666; font-size: 10px; font-style: italic; }
       `}</style>
     </>
   );

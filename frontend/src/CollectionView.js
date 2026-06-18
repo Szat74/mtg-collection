@@ -3,9 +3,20 @@ import React, { useState, useEffect } from 'react';
 const API = '/api';
 const RARITY_COLOR = { common: '#c0c0c0', uncommon: '#a8c4d4', rare: '#d4af37', mythic: '#e85c2e', special: '#c879ff' };
 
+const COLOR_NAMES = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green' };
+
 // ── Per-copy deck row inside the edit panel ───────────────────────────────────
-// decks: [{id, name}], copy.deck_id: integer|null
-function CopyRow({ copy, index, decks, onChange }) {
+function CopyRow({ copy, index, decks, cardColorIdentity, onChange }) {
+  const selectedDeck = decks.find(d => d.id === copy.deck_id) ?? null;
+
+  const identityFits = (deck) => {
+    if (deck.format !== 'commander' || !deck.commander_id || !deck.colors?.length) return true;
+    if (!cardColorIdentity?.length) return true; // colorless fits anywhere
+    return cardColorIdentity.every(c => deck.colors.includes(c));
+  };
+
+  const eligibleDecks = decks.filter(d => d.id === copy.deck_id || identityFits(d));
+
   return (
     <div className="copy-row">
       <span className="copy-label">Copy {index + 1}</span>
@@ -14,20 +25,25 @@ function CopyRow({ copy, index, decks, onChange }) {
         onChange={e => onChange(copy.id, e.target.value ? parseInt(e.target.value, 10) : null)}
       >
         <option value="">— unassigned —</option>
-        {decks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+        {eligibleDecks.map(d => (
+          <option key={d.id} value={d.id}>
+            {d.name}{d.format === 'commander' && !d.commander_id ? ' ⚠ no commander' : ''}
+          </option>
+        ))}
       </select>
     </div>
   );
 }
 
 // ── Card tile (grouped) ───────────────────────────────────────────────────────
-function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode, selected, onSelect }) {
-  const [editing, setEditing]     = useState(false);
-  const [foil, setFoil]           = useState(!!card.foil);
-  const [copies, setCopies]       = useState(card.copies || []);
+function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, onGroupCreated, bulkMode, selected, onSelect }) {
+  const [editing, setEditing]       = useState(false);
+  const [foil, setFoil]             = useState(!!card.foil);
+  const [copies, setCopies]         = useState(card.copies || []);
   // selGroups: Set of group IDs (integers)
-  const [selGroups, setSelGroups] = useState(() => new Set((card.groups || []).map(g => g.id)));
-  const [flipped, setFlipped]     = useState(false);
+  const [selGroups, setSelGroups]   = useState(() => new Set((card.groups || []).map(g => g.id)));
+  const [flipped, setFlipped]       = useState(false);
+  const [groupSearch, setGroupSearch] = useState('');
 
   useEffect(() => {
     setCopies(card.copies || []);
@@ -40,6 +56,21 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
       next.has(gid) ? next.delete(gid) : next.add(gid);
       return next;
     });
+
+  const createGroupByName = async (name) => {
+    if (!name) return;
+    const res = await fetch(`${API}/groups`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (res.ok) {
+      const g = await res.json();
+      onGroupCreated(g);
+      setSelGroups(prev => new Set([...prev, g.id]));
+      setGroupSearch('');
+    }
+  };
 
   const setCopyDeck = (id, deckId) =>
     setCopies(prev => prev.map(c => c.id === id ? { ...c, deck_id: deckId } : c));
@@ -170,19 +201,60 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
                   copy={copy}
                   index={i}
                   decks={decks}
+                  cardColorIdentity={card.color_identity ? JSON.parse(card.color_identity) : []}
                   onChange={setCopyDeck}
                 />
               ))}
             </div>
 
             <label>Groups</label>
-            <div className="multi-select-list">
-              {(groups || []).map(g => (
-                <label key={g.id} className="multi-select-item">
-                  <input type="checkbox" checked={selGroups.has(g.id)} onChange={() => toggleGroup(g.id)} />
-                  {g.name}
-                </label>
-              ))}
+            {/* Selected groups — uncheck to remove */}
+            {selGroups.size > 0 && (
+              <div className="group-selected-list">
+                {(groups || []).filter(g => selGroups.has(g.id)).map(g => (
+                  <label key={g.id} className="multi-select-item">
+                    <input type="checkbox" checked onChange={() => toggleGroup(g.id)} />
+                    {g.name}
+                  </label>
+                ))}
+              </div>
+            )}
+            {/* Searchable dropdown for adding groups */}
+            <div className="group-search-wrap">
+              <input
+                className="new-group-input"
+                placeholder="Search or create tag…"
+                value={groupSearch}
+                onChange={e => setGroupSearch(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    const q = groupSearch.trim();
+                    const match = (groups || []).find(g => g.name.toLowerCase() === q.toLowerCase());
+                    if (match) { toggleGroup(match.id); setGroupSearch(''); }
+                    else if (q) { setNewGroupName(q); createGroupByName(q); }
+                  }
+                  if (e.key === 'Escape') setGroupSearch('');
+                }}
+              />
+              {groupSearch.trim() && (
+                <div className="group-dropdown">
+                  {(groups || [])
+                    .filter(g => !selGroups.has(g.id) && g.name.toLowerCase().includes(groupSearch.toLowerCase()))
+                    .map(g => (
+                      <div key={g.id} className="group-dropdown-item"
+                        onMouseDown={e => { e.preventDefault(); toggleGroup(g.id); setGroupSearch(''); }}>
+                        {g.name}
+                      </div>
+                    ))
+                  }
+                  {!(groups || []).some(g => g.name.toLowerCase() === groupSearch.trim().toLowerCase()) && (
+                    <div className="group-dropdown-item group-dropdown-create"
+                      onMouseDown={e => { e.preventDefault(); createGroupByName(groupSearch.trim()); }}>
+                      + Create "{groupSearch.trim()}"
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="edit-btns">
@@ -198,7 +270,7 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
 
 // ── Collection view ───────────────────────────────────────────────────────────
 // decks: [{id, name, ...}], groups: [{id, name}]
-export default function CollectionView({ cards: initialCards, decks, groups, fetchCards, refresh, showToast }) {
+export default function CollectionView({ cards: initialCards, decks, groups, onGroupCreated, fetchCards, refresh, showToast }) {
   const [cards, setCards]               = useState(initialCards);
   const [search, setSearch]             = useState('');
   const [filterDeck, setFilterDeck]     = useState('');   // deck id (string of int) or ''
@@ -501,6 +573,7 @@ export default function CollectionView({ cards: initialCards, decks, groups, fet
                 onUpdate={handleUpdate}
                 onDelete={handleDelete}
                 onAddCopy={handleAddCopy}
+                onGroupCreated={onGroupCreated}
                 bulkMode={bulkMode}
                 selected={card.ids.every(id => selectedIds.has(id))}
                 onSelect={toggleSelectGroup}

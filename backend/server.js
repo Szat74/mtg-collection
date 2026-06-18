@@ -84,6 +84,9 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_coll_groups   ON collection_groups (group_id);
 `);
 
+// Migrate: add color_identity column if it doesn't exist yet
+try { db.exec('ALTER TABLE card_cache ADD COLUMN color_identity TEXT'); } catch {}
+
 // ─── Fetch helper ─────────────────────────────────────────────────────────────
 async function scryFetch(url, options = {}) {
   const controller = new AbortController();
@@ -119,11 +122,11 @@ async function refreshBulkCache() {
     const upsert = db.prepare(`
       INSERT INTO card_cache
         (scryfall_id, name, set_code, set_name, collector_number, image_uri, image_back,
-         mana_cost, type_line, oracle_text, colors, rarity,
+         mana_cost, type_line, oracle_text, colors, color_identity, rarity,
          prices_usd, prices_usd_foil, prices_usd_etched, foil_only, cached_at)
       VALUES
         (@scryfall_id, @name, @set_code, @set_name, @collector_number, @image_uri, @image_back,
-         @mana_cost, @type_line, @oracle_text, @colors, @rarity,
+         @mana_cost, @type_line, @oracle_text, @colors, @color_identity, @rarity,
          @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, datetime('now'))
       ON CONFLICT(scryfall_id) DO UPDATE SET
         name=excluded.name, set_code=excluded.set_code, set_name=excluded.set_name,
@@ -131,6 +134,7 @@ async function refreshBulkCache() {
         image_uri=excluded.image_uri, image_back=excluded.image_back,
         mana_cost=excluded.mana_cost, type_line=excluded.type_line,
         oracle_text=excluded.oracle_text, colors=excluded.colors,
+        color_identity=excluded.color_identity,
         rarity=excluded.rarity,
         prices_usd=excluded.prices_usd, prices_usd_foil=excluded.prices_usd_foil,
         prices_usd_etched=excluded.prices_usd_etched, foil_only=excluded.foil_only,
@@ -180,7 +184,8 @@ function cardToRow(c) {
     mana_cost:        c.mana_cost    ?? null,
     type_line:        c.type_line    ?? null,
     oracle_text:      c.oracle_text  ?? null,
-    colors:           c.colors       ? JSON.stringify(c.colors) : null,
+    colors:           c.colors          ? JSON.stringify(c.colors)          : null,
+    color_identity:   c.color_identity  ? JSON.stringify(c.color_identity)  : null,
     rarity:           c.rarity       ?? null,
     ...parsePrices(c.prices),
     foil_only: (c.foil === true && c.nonfoil === false) ? 1 : 0,
@@ -233,7 +238,8 @@ function cacheRowToScryfall(c) {
     mana_cost:        c.mana_cost,
     type_line:        c.type_line,
     oracle_text:      c.oracle_text,
-    colors:           c.colors ? JSON.parse(c.colors) : [],
+    colors:           c.colors          ? JSON.parse(c.colors)          : [],
+    color_identity:   c.color_identity  ? JSON.parse(c.color_identity)  : [],
     rarity:           c.rarity,
     prices:           formatPrices(c),
   };
@@ -256,8 +262,9 @@ function mergeCache(collRow) {
     mana_cost:        cache?.mana_cost        ?? null,
     type_line:        cache?.type_line        ?? null,
     oracle_text:      cache?.oracle_text      ?? null,
-    colors:           cache?.colors           ?? null,
-    rarity:           cache?.rarity           ?? null,
+    colors:           cache?.colors          ?? null,
+    color_identity:   cache?.color_identity  ?? null,
+    rarity:           cache?.rarity          ?? null,
     prices_usd:       cache?.prices_usd       ?? null,
     prices_usd_foil:  cache?.prices_usd_foil  ?? null,
     prices_usd_etched:cache?.prices_usd_etched?? null,
@@ -445,13 +452,36 @@ app.post('/api/cards', (req, res) => {
       db.prepare(`
         INSERT OR IGNORE INTO card_cache
           (scryfall_id, name, set_code, set_name, collector_number, image_uri, image_back,
-           mana_cost, type_line, oracle_text, colors, rarity,
+           mana_cost, type_line, oracle_text, colors, color_identity, rarity,
            prices_usd, prices_usd_foil, prices_usd_etched, foil_only, cached_at)
         VALUES
           (@scryfall_id, @name, @set_code, @set_name, @collector_number, @image_uri, @image_back,
-           @mana_cost, @type_line, @oracle_text, @colors, @rarity,
+           @mana_cost, @type_line, @oracle_text, @colors, @color_identity, @rarity,
            @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, datetime('now'))
       `).run(cardToRow(scryfall_card));
+    }
+  }
+
+  // Enforce commander color identity
+  if (deck_id) {
+    const deck = db.prepare('SELECT format, commander_id FROM decks WHERE id = ?').get(deck_id);
+    if (deck?.format === 'commander' && deck.commander_id) {
+      const cmdRow = db.prepare(`
+        SELECT cc.color_identity FROM collection c
+        LEFT JOIN card_cache cc ON cc.scryfall_id = c.scryfall_id
+        WHERE c.id = ?
+      `).get(deck.commander_id);
+      const commanderIdentity = cmdRow?.color_identity ? JSON.parse(cmdRow.color_identity) : null;
+      // Only enforce if we have commander identity data
+      if (commanderIdentity !== null) {
+        const cardIdentity = scryfall_card.color_identity || [];
+        const invalid = cardIdentity.filter(c => !commanderIdentity.includes(c));
+        if (invalid.length > 0) {
+          return res.status(400).json({
+            error: `"${scryfall_card.name}" has color identity [${cardIdentity.join(',')}] which is outside the commander's identity [${commanderIdentity.join(',')}]`,
+          });
+        }
+      }
     }
   }
 
@@ -479,11 +509,11 @@ app.post('/api/cards/copies', (req, res) => {
       db.prepare(`
         INSERT OR IGNORE INTO card_cache
           (scryfall_id, name, set_code, set_name, collector_number, image_uri, image_back,
-           mana_cost, type_line, oracle_text, colors, rarity,
+           mana_cost, type_line, oracle_text, colors, color_identity, rarity,
            prices_usd, prices_usd_foil, prices_usd_etched, foil_only, cached_at)
         VALUES
           (@scryfall_id, @name, @set_code, @set_name, @collector_number, @image_uri, @image_back,
-           @mana_cost, @type_line, @oracle_text, @colors, @rarity,
+           @mana_cost, @type_line, @oracle_text, @colors, @color_identity, @rarity,
            @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, datetime('now'))
       `).run(cardToRow(scryfall_card));
     }
@@ -514,6 +544,33 @@ app.patch('/api/cards/:id', (req, res) => {
   if (foil !== undefined)        { updates.push('foil = ?');        params.push(foil ? 1 : 0); }
   if (deck_id !== undefined)     { updates.push('deck_id = ?');     params.push(deck_id ?? null); }
   if (scryfall_id !== undefined) { updates.push('scryfall_id = ?'); params.push(scryfall_id ?? null); }
+
+  // Enforce commander color identity when moving a card into a commander deck
+  if (deck_id != null) {
+    const deck = db.prepare('SELECT format, commander_id FROM decks WHERE id = ?').get(deck_id);
+    if (deck?.format === 'commander' && deck.commander_id) {
+      const cardRow = db.prepare(`
+        SELECT cc.color_identity FROM collection c
+        LEFT JOIN card_cache cc ON cc.scryfall_id = c.scryfall_id
+        WHERE c.id = ?
+      `).get(id);
+      const cmdRow = db.prepare(`
+        SELECT cc.color_identity FROM collection c
+        LEFT JOIN card_cache cc ON cc.scryfall_id = c.scryfall_id
+        WHERE c.id = ?
+      `).get(deck.commander_id);
+      const commanderIdentity = cmdRow?.color_identity ? JSON.parse(cmdRow.color_identity) : null;
+      if (commanderIdentity !== null) {
+        const cardIdentity = cardRow?.color_identity ? JSON.parse(cardRow.color_identity) : [];
+        const invalid = cardIdentity.filter(c => !commanderIdentity.includes(c));
+        if (invalid.length > 0) {
+          return res.status(400).json({
+            error: `Card color identity [${cardIdentity.join(',')}] is outside the commander's identity [${commanderIdentity.join(',')}]`,
+          });
+        }
+      }
+    }
+  }
 
   if (updates.length) {
     params.push(id);
@@ -590,14 +647,28 @@ app.get('/api/decks', (req, res) => {
       'SELECT COUNT(*) AS cardCount FROM collection WHERE deck_id = ?'
     ).get(deck.id);
 
+    let commander_name   = null;
+    let commander_colors = null;
+    if (deck.commander_id) {
+      const cmd = db.prepare(`
+        SELECT c.name, cc.colors FROM collection c
+        LEFT JOIN card_cache cc ON cc.scryfall_id = c.scryfall_id
+        WHERE c.id = ?
+      `).get(deck.commander_id);
+      commander_name   = cmd?.name ?? null;
+      commander_colors = cmd?.colors ? JSON.parse(cmd.colors) : [];
+    }
+
     return {
-      id:           deck.id,
-      name:         deck.name,
-      colors:       deck.colors ? JSON.parse(deck.colors) : [],
-      description:  deck.description,
-      format:       deck.format,
-      commander_id: deck.commander_id,
-      created_at:   deck.created_at,
+      id:               deck.id,
+      name:             deck.name,
+      colors:           deck.colors ? JSON.parse(deck.colors) : [],
+      description:      deck.description,
+      format:           deck.format,
+      commander_id:     deck.commander_id,
+      commander_name,
+      commander_colors,
+      created_at:       deck.created_at,
       cardCount,
     };
   });
@@ -634,13 +705,12 @@ app.patch('/api/decks/:id', (req, res) => {
   if (description !== undefined) { updates.push('description = ?');  params.push(description ?? null); }
   if (format      !== undefined) { updates.push('format = ?');       params.push(format ?? null); }
   if (commander_id !== undefined) {
-    // Validate: if format is commander, referenced card must have Legendary in type_line
     if (commander_id != null) {
       const deck = db.prepare('SELECT format FROM decks WHERE id = ?').get(deckId);
       const deckFormat = format ?? deck?.format;
       if (deckFormat === 'commander') {
         const card = db.prepare(`
-          SELECT cc.type_line FROM collection c
+          SELECT cc.type_line, cc.color_identity FROM collection c
           LEFT JOIN card_cache cc ON cc.scryfall_id = c.scryfall_id
           WHERE c.id = ?
         `).get(commander_id);
@@ -648,7 +718,15 @@ app.patch('/api/decks/:id', (req, res) => {
         if (!card.type_line?.includes('Legendary')) {
           return res.status(400).json({ error: 'Commander must be a Legendary card' });
         }
+        // Auto-set deck colors to commander's color identity (only when colors not explicitly provided)
+        if (colors === undefined && card.color_identity) {
+          const identity = JSON.parse(card.color_identity);
+          updates.push('colors = ?');
+          params.push(identity.length ? JSON.stringify(identity) : null);
+        }
       }
+    } else {
+      // Clearing the commander — do not auto-clear colors
     }
     updates.push('commander_id = ?');
     params.push(commander_id ?? null);
