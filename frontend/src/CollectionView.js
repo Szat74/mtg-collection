@@ -4,17 +4,17 @@ const API = '/api';
 const RARITY_COLOR = { common: '#c0c0c0', uncommon: '#a8c4d4', rare: '#d4af37', mythic: '#e85c2e', special: '#c879ff' };
 
 // ── Per-copy deck row inside the edit panel ───────────────────────────────────
+// decks: [{id, name}], copy.deck_id: integer|null
 function CopyRow({ copy, index, decks, onChange }) {
-  const deck = copy.decks?.[0] || '';
   return (
     <div className="copy-row">
       <span className="copy-label">Copy {index + 1}</span>
       <select
-        value={deck}
-        onChange={e => onChange(copy.id, e.target.value || null)}
+        value={copy.deck_id ?? ''}
+        onChange={e => onChange(copy.id, e.target.value ? parseInt(e.target.value, 10) : null)}
       >
         <option value="">— unassigned —</option>
-        {decks.map(d => <option key={d} value={d}>{d}</option>)}
+        {decks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
       </select>
     </div>
   );
@@ -25,26 +25,27 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
   const [editing, setEditing]     = useState(false);
   const [foil, setFoil]           = useState(!!card.foil);
   const [copies, setCopies]       = useState(card.copies || []);
-  const [selGroups, setSelGroups] = useState(card.groups || []);
-  const [newGroup, setNewGroup]   = useState('');
-  const [newDeck, setNewDeck]     = useState('');
+  // selGroups: Set of group IDs (integers)
+  const [selGroups, setSelGroups] = useState(() => new Set((card.groups || []).map(g => g.id)));
   const [flipped, setFlipped]     = useState(false);
 
   useEffect(() => {
     setCopies(card.copies || []);
-    setSelGroups(card.groups || []);
+    setSelGroups(new Set((card.groups || []).map(g => g.id)));
   }, [card]);
 
-  const toggleGroup = (g) => setSelGroups(prev => prev.includes(g) ? prev.filter(x => x !== g) : [...prev, g]);
+  const toggleGroup = (gid) =>
+    setSelGroups(prev => {
+      const next = new Set(prev);
+      next.has(gid) ? next.delete(gid) : next.add(gid);
+      return next;
+    });
 
-  const setCopyDeck = (id, deck) => {
-    setCopies(prev => prev.map(c => c.id === id ? { ...c, decks: deck ? [deck] : [] } : c));
-  };
+  const setCopyDeck = (id, deckId) =>
+    setCopies(prev => prev.map(c => c.id === id ? { ...c, deck_id: deckId } : c));
 
   const save = async () => {
-    const finalGroups = newGroup.trim()
-      ? [...new Set([...selGroups, newGroup.trim()])]
-      : selGroups;
+    const groupIds = [...selGroups];
 
     const updated = await Promise.all(copies.map(copy =>
       fetch(`${API}/cards/${copy.id}`, {
@@ -52,15 +53,13 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           foil,
-          decks: copy.decks || [],
-          groups: finalGroups,
+          deck_id: copy.deck_id ?? null,
+          groups: groupIds,
         }),
       }).then(r => r.json())
     ));
 
     onUpdate(updated);
-    setNewGroup('');
-    setNewDeck('');
     setEditing(false);
   };
 
@@ -72,7 +71,7 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
 
   const delOneCopy = async () => {
     if (copies.length === 1) return;
-    const unassigned = copies.find(c => !c.decks?.length);
+    const unassigned = copies.find(c => !c.deck_id);
     const target = unassigned || copies[copies.length - 1];
     await fetch(`${API}/cards/${target.id}`, { method: 'DELETE' });
     onDelete([target.id]);
@@ -82,17 +81,18 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
   const hasBack = !!card.image_back;
   const imgSrc  = flipped && hasBack ? card.image_back : card.image_uri;
 
-  // Use foil price when foil, fall back gracefully for foil-only cards
   const rawPrice = isFoil
     ? (card.prices_usd_foil ?? card.prices_usd_etched ?? card.prices_usd)
     : (card.prices_usd ?? card.prices_usd_foil ?? card.prices_usd_etched);
   const price = rawPrice ? `$${parseFloat(rawPrice).toFixed(2)}` : null;
 
-  // Summarise deck assignments for badge display
+  // Summarise deck assignments for badge display: deck name → count
   const deckCounts = {};
   for (const copy of (card.copies || [])) {
-    for (const d of (copy.decks || [])) {
-      deckCounts[d] = (deckCounts[d] || 0) + 1;
+    if (copy.deck_id) {
+      const deck = decks.find(d => d.id === copy.deck_id);
+      const label = deck?.name ?? `#${copy.deck_id}`;
+      deckCounts[label] = (deckCounts[label] || 0) + 1;
     }
   }
 
@@ -130,9 +130,9 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
         {/* Deck badges */}
         {Object.keys(deckCounts).length > 0 && (
           <div className="card-badges">
-            {Object.entries(deckCounts).map(([d, n]) => (
-              <span key={d} className="card-deck-badge">
-                {d}{n > 1 ? ` ×${n}` : ''}
+            {Object.entries(deckCounts).map(([name, n]) => (
+              <span key={name} className="card-deck-badge">
+                {name}{n > 1 ? ` ×${n}` : ''}
               </span>
             ))}
           </div>
@@ -140,7 +140,7 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
         {/* Group badges */}
         {(card.groups || []).length > 0 && (
           <div className="card-badges">
-            {card.groups.map(g => <span key={g} className="card-group-badge">{g}</span>)}
+            {card.groups.map(g => <span key={g.id} className="card-group-badge">{g.name}</span>)}
           </div>
         )}
 
@@ -169,7 +169,7 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
                   key={copy.id}
                   copy={copy}
                   index={i}
-                  decks={newDeck ? [...decks, newDeck] : decks}
+                  decks={decks}
                   onChange={setCopyDeck}
                 />
               ))}
@@ -178,18 +178,12 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
             <label>Groups</label>
             <div className="multi-select-list">
               {(groups || []).map(g => (
-                <label key={g} className="multi-select-item">
-                  <input type="checkbox" checked={selGroups.includes(g)} onChange={() => toggleGroup(g)} />
-                  {g}
+                <label key={g.id} className="multi-select-item">
+                  <input type="checkbox" checked={selGroups.has(g.id)} onChange={() => toggleGroup(g.id)} />
+                  {g.name}
                 </label>
               ))}
             </div>
-            <input
-              className="new-group-input"
-              placeholder="+ New group name"
-              value={newGroup}
-              onChange={e => setNewGroup(e.target.value)}
-            />
 
             <div className="edit-btns">
               <button className="btn-sm btn-save" onClick={save}>Save</button>
@@ -203,11 +197,12 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
 }
 
 // ── Collection view ───────────────────────────────────────────────────────────
+// decks: [{id, name, ...}], groups: [{id, name}]
 export default function CollectionView({ cards: initialCards, decks, groups, fetchCards, refresh, showToast }) {
   const [cards, setCards]               = useState(initialCards);
   const [search, setSearch]             = useState('');
-  const [filterDeck, setFilterDeck]     = useState('');
-  const [filterGroup, setFilterGroup]   = useState('');
+  const [filterDeck, setFilterDeck]     = useState('');   // deck id (string of int) or ''
+  const [filterGroup, setFilterGroup]   = useState('');   // group id (string of int) or ''
   const [filterFoil, setFilterFoil]     = useState('');
   const [filterColors, setFilterColors] = useState(new Set());
   const [sort, setSort]                 = useState('name');
@@ -216,10 +211,8 @@ export default function CollectionView({ cards: initialCards, decks, groups, fet
   // Bulk-edit state
   const [bulkMode, setBulkMode]           = useState(false);
   const [selectedIds, setSelectedIds]     = useState(new Set());
-  const [bulkDeck, setBulkDeck]           = useState('');
-  const [newBulkDeck, setNewBulkDeck]     = useState('');
-  const [bulkGroup, setBulkGroup]         = useState('');
-  const [newBulkGroup, setNewBulkGroup]   = useState('');
+  const [bulkDeck, setBulkDeck]           = useState('');   // deck id or ''
+  const [bulkGroup, setBulkGroup]         = useState('');   // group id or ''
   const [bulkBusy, setBulkBusy]           = useState(false);
 
   useEffect(() => { setCards(initialCards); }, [initialCards]);
@@ -227,8 +220,8 @@ export default function CollectionView({ cards: initialCards, decks, groups, fet
   const applyFilters = async () => {
     const params = {};
     if (search)                params.search = search;
-    if (filterDeck)            params.deck   = filterDeck;
-    if (filterGroup)           params.group  = filterGroup;
+    if (filterDeck)            params.deck   = filterDeck;   // already an id
+    if (filterGroup)           params.group  = filterGroup;  // already an id
     if (filterFoil !== '')     params.foil   = filterFoil;
     if (filterColors.size > 0) params.colors = [...filterColors].join(',');
     params.sort  = sort;
@@ -238,14 +231,22 @@ export default function CollectionView({ cards: initialCards, decks, groups, fet
 
   useEffect(() => { applyFilters(); }, [search, filterDeck, filterGroup, filterFoil, filterColors, sort, order]);
 
+  // updatedRows are full collection rows returned by PATCH (with groups: [{id,name}], deck_id)
   const handleUpdate = (updatedRows) => {
     setCards(prev => {
       const rowMap = Object.fromEntries(updatedRows.map(r => [r.id, r]));
       return prev.map(card => {
-        const newCopies = card.copies.map(c => rowMap[c.id] ? { id: c.id, decks: rowMap[c.id].decks, groups: rowMap[c.id].groups } : c);
-        const decks  = [...new Set(newCopies.flatMap(c => c.decks  || []))];
-        const groups = [...new Set(newCopies.flatMap(c => c.groups || []))];
-        return { ...card, copies: newCopies, decks, groups };
+        const newCopies = card.copies.map(c =>
+          rowMap[c.id]
+            ? { id: c.id, deck_id: rowMap[c.id].deck_id ?? null, groups: rowMap[c.id].groups || [] }
+            : c
+        );
+        // Aggregate groups across all copies (by id, deduplicated)
+        const groupMap = new Map();
+        for (const copy of newCopies) {
+          for (const g of (copy.groups || [])) groupMap.set(g.id, g);
+        }
+        return { ...card, copies: newCopies, groups: [...groupMap.values()] };
       });
     });
     refresh();
@@ -253,18 +254,20 @@ export default function CollectionView({ cards: initialCards, decks, groups, fet
 
   const handleDelete = (deletedIds) => {
     const delSet = new Set(deletedIds);
-    setCards(prev => {
-      return prev
+    setCards(prev =>
+      prev
         .map(card => {
           const newCopies = card.copies.filter(c => !delSet.has(c.id));
           if (newCopies.length === 0) return null;
           const newIds = card.ids.filter(id => !delSet.has(id));
-          const decks  = [...new Set(newCopies.flatMap(c => c.decks  || []))];
-          const groups = [...new Set(newCopies.flatMap(c => c.groups || []))];
-          return { ...card, copies: newCopies, ids: newIds, quantity: newCopies.length, decks, groups };
+          const groupMap = new Map();
+          for (const copy of newCopies) {
+            for (const g of (copy.groups || [])) groupMap.set(g.id, g);
+          }
+          return { ...card, copies: newCopies, ids: newIds, quantity: newCopies.length, groups: [...groupMap.values()] };
         })
-        .filter(Boolean);
-    });
+        .filter(Boolean)
+    );
     refresh();
   };
 
@@ -290,7 +293,7 @@ export default function CollectionView({ cards: initialCards, decks, groups, fet
       body: JSON.stringify({ scryfall_card, foil: card.foil, count: 1 }),
     });
     const { ids } = await res.json();
-    const newCopy = { id: ids[0], decks: [], groups: [] };
+    const newCopy = { id: ids[0], deck_id: null, groups: [] };
     setCards(prev => prev.map(c => {
       if (c.ids[0] !== card.ids[0] && c.name !== card.name) return c;
       if (c.set_code !== card.set_code || c.collector_number !== card.collector_number) return c;
@@ -323,8 +326,8 @@ export default function CollectionView({ cards: initialCards, decks, groups, fet
   const exitBulk = () => {
     setBulkMode(false);
     setSelectedIds(new Set());
-    setBulkDeck(''); setNewBulkDeck('');
-    setBulkGroup(''); setNewBulkGroup('');
+    setBulkDeck('');
+    setBulkGroup('');
   };
 
   const bulkDelete = async () => {
@@ -339,38 +342,42 @@ export default function CollectionView({ cards: initialCards, decks, groups, fet
   };
 
   const bulkAssignDeck = async () => {
-    const deck = bulkDeck === '__new__' ? newBulkDeck.trim() : bulkDeck;
-    if (!deck || !selectedIds.size) return;
+    const deckId = bulkDeck ? parseInt(bulkDeck, 10) : null;
+    if (!deckId || !selectedIds.size) return;
     setBulkBusy(true);
     const updated = await Promise.all([...selectedIds].map(id =>
       fetch(`${API}/cards/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ decks: [deck] }),
+        body: JSON.stringify({ deck_id: deckId }),
       }).then(r => r.json())
     ));
     handleUpdate(updated);
-    showToast(`Assigned ${selectedIds.size} cop${selectedIds.size === 1 ? 'y' : 'ies'} to "${deck}"`);
+    const deck = decks.find(d => d.id === deckId);
+    showToast(`Assigned ${selectedIds.size} cop${selectedIds.size === 1 ? 'y' : 'ies'} to "${deck?.name ?? deckId}"`);
     exitBulk();
     setBulkBusy(false);
   };
 
   const bulkAssignGroup = async () => {
-    const group = bulkGroup === '__new__' ? newBulkGroup.trim() : bulkGroup;
-    if (!group || !selectedIds.size) return;
+    const groupId = bulkGroup ? parseInt(bulkGroup, 10) : null;
+    if (!groupId || !selectedIds.size) return;
     setBulkBusy(true);
+    // For each selected copy, merge the new group id into its existing group ids
     const allRows = cards.flatMap(c => c.copies);
     const updated = await Promise.all([...selectedIds].map(id => {
       const copy = allRows.find(c => c.id === id);
-      const newGroups = [...new Set([...(copy?.groups || []), group])];
+      const existingIds = (copy?.groups || []).map(g => g.id);
+      const newGroupIds = [...new Set([...existingIds, groupId])];
       return fetch(`${API}/cards/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groups: newGroups }),
+        body: JSON.stringify({ groups: newGroupIds }),
       }).then(r => r.json());
     }));
     handleUpdate(updated);
-    showToast(`Assigned ${selectedIds.size} cop${selectedIds.size === 1 ? 'y' : 'ies'} to group "${group}"`);
+    const group = groups.find(g => g.id === groupId);
+    showToast(`Assigned ${selectedIds.size} cop${selectedIds.size === 1 ? 'y' : 'ies'} to group "${group?.name ?? groupId}"`);
     exitBulk();
     setBulkBusy(false);
   };
@@ -386,11 +393,11 @@ export default function CollectionView({ cards: initialCards, decks, groups, fet
         />
         <select value={filterDeck} onChange={e => setFilterDeck(e.target.value)}>
           <option value="">All Decks</option>
-          {decks.map(d => <option key={d} value={d}>{d}</option>)}
+          {decks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
         </select>
         <select value={filterGroup} onChange={e => setFilterGroup(e.target.value)}>
           <option value="">All Groups</option>
-          {(groups || []).map(g => <option key={g} value={g}>{g}</option>)}
+          {(groups || []).map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
         </select>
         <select value={filterFoil} onChange={e => setFilterFoil(e.target.value)}>
           <option value="">Foil + Non-foil</option>
@@ -455,15 +462,10 @@ export default function CollectionView({ cards: initialCards, decks, groups, fet
           <div className="bulk-assign">
             <select value={bulkDeck} onChange={e => setBulkDeck(e.target.value)} disabled={bulkBusy}>
               <option value="">— Assign to deck —</option>
-              {decks.map(d => <option key={d} value={d}>{d}</option>)}
-              <option value="__new__">+ New deck…</option>
+              {decks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
-            {bulkDeck === '__new__' && (
-              <input className="bulk-new-deck" placeholder="Deck name" value={newBulkDeck}
-                onChange={e => setNewBulkDeck(e.target.value)} disabled={bulkBusy} />
-            )}
             <button className="btn-sm btn-save" onClick={bulkAssignDeck}
-              disabled={bulkBusy || !selectedIds.size || !bulkDeck || (bulkDeck === '__new__' && !newBulkDeck.trim())}>
+              disabled={bulkBusy || !selectedIds.size || !bulkDeck}>
               Assign
             </button>
           </div>
@@ -471,15 +473,10 @@ export default function CollectionView({ cards: initialCards, decks, groups, fet
           <div className="bulk-assign">
             <select value={bulkGroup} onChange={e => setBulkGroup(e.target.value)} disabled={bulkBusy}>
               <option value="">— Assign to group —</option>
-              {(groups || []).map(g => <option key={g} value={g}>{g}</option>)}
-              <option value="__new__">+ New group…</option>
+              {(groups || []).map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
             </select>
-            {bulkGroup === '__new__' && (
-              <input className="bulk-new-deck" placeholder="Group name" value={newBulkGroup}
-                onChange={e => setNewBulkGroup(e.target.value)} disabled={bulkBusy} />
-            )}
             <button className="btn-sm btn-save" onClick={bulkAssignGroup}
-              disabled={bulkBusy || !selectedIds.size || !bulkGroup || (bulkGroup === '__new__' && !newBulkGroup.trim())}>
+              disabled={bulkBusy || !selectedIds.size || !bulkGroup}>
               Assign
             </button>
           </div>

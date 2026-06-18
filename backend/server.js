@@ -8,10 +8,10 @@ const zlib = require('zlib');
 const readline = require('readline');
 
 // ─── Config ───────────────────────────────────────────────────────────────────
-const PORT     = process.env.PORT     || 3001;
-const DB_PATH  = process.env.DB_PATH  || '/data/collection.db';
+const PORT            = process.env.PORT     || 3001;
+const DB_PATH         = process.env.DB_PATH  || '/data/collection.db';
 const BULK_REFRESH_MS = 12 * 60 * 60 * 1000;
-const SCRYFALL_UA = `mtg-collection/1.0 (self-hosted; ${process.env.SCRYFALL_CONTACT_EMAIL || 'unknown'})`;
+const SCRYFALL_UA     = `mtg-collection/1.0 (self-hosted; ${process.env.SCRYFALL_CONTACT_EMAIL || 'unknown'})`;
 
 // ─── Database setup ───────────────────────────────────────────────────────────
 const db = new Database(DB_PATH);
@@ -19,142 +19,70 @@ const db = new Database(DB_PATH);
 db.exec(`
   PRAGMA journal_mode = WAL;
   PRAGMA foreign_keys = ON;
-  
+
+  CREATE TABLE IF NOT EXISTS card_cache (
+    scryfall_id       TEXT PRIMARY KEY,
+    name              TEXT,
+    set_code          TEXT,
+    set_name          TEXT,
+    collector_number  TEXT,
+    image_uri         TEXT,
+    image_back        TEXT,
+    mana_cost         TEXT,
+    type_line         TEXT,
+    oracle_text       TEXT,
+    colors            TEXT,
+    rarity            TEXT,
+    prices_usd        REAL,
+    prices_usd_foil   REAL,
+    prices_usd_etched REAL,
+    foil_only         INTEGER,
+    cached_at         TEXT
+  );
+
   CREATE TABLE IF NOT EXISTS decks (
-    name       TEXT PRIMARY KEY,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT UNIQUE NOT NULL,
+    colors       TEXT,
+    description  TEXT,
+    format       TEXT,
+    commander_id INTEGER REFERENCES collection(id) ON DELETE SET NULL,
+    created_at   TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS groups (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT UNIQUE NOT NULL,
+    description TEXT,
+    created_at  TEXT DEFAULT (datetime('now'))
   );
 
   CREATE TABLE IF NOT EXISTS collection (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    name             TEXT    NOT NULL,
-    set_code         TEXT,
-    set_name         TEXT,
-    collector_number TEXT,
-    foil             INTEGER NOT NULL DEFAULT 0,
-    deck             TEXT,
-    scryfall_id      TEXT,
-    image_uri        TEXT,
-    image_back       TEXT,
-    mana_cost        TEXT,
-    type_line        TEXT,
-    oracle_text      TEXT,
-    colors           TEXT,
-    rarity           TEXT,
-    prices_usd       REAL,
-    prices_usd_foil  REAL,
-    prices_usd_etched REAL,
-    added_at         TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  CREATE TABLE IF NOT EXISTS collection_decks (
-    collection_id INTEGER NOT NULL REFERENCES collection(id) ON DELETE CASCADE,
-    deck          TEXT    NOT NULL,
-    PRIMARY KEY (collection_id, deck)
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    scryfall_id  TEXT REFERENCES card_cache(scryfall_id),
+    name         TEXT NOT NULL,
+    deck_id      INTEGER REFERENCES decks(id) ON DELETE SET NULL,
+    foil         INTEGER NOT NULL DEFAULT 0,
+    added_at     TEXT DEFAULT (datetime('now'))
   );
 
   CREATE TABLE IF NOT EXISTS collection_groups (
     collection_id INTEGER NOT NULL REFERENCES collection(id) ON DELETE CASCADE,
-    group_name    TEXT    NOT NULL,
-    PRIMARY KEY (collection_id, group_name)
+    group_id      INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    PRIMARY KEY (collection_id, group_id)
   );
-
-  CREATE TABLE IF NOT EXISTS card_cache (
-    scryfall_id      TEXT PRIMARY KEY,
-    name             TEXT NOT NULL,
-    set_code         TEXT,
-    set_name         TEXT,
-    collector_number TEXT,
-    image_uri        TEXT,
-    image_back       TEXT,
-    mana_cost        TEXT,
-    type_line        TEXT,
-    oracle_text      TEXT,
-    colors           TEXT,
-    rarity           TEXT,
-    prices_usd       REAL,
-    prices_usd_foil  REAL,
-    prices_usd_etched REAL,
-    cached_at        TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_cache_name    ON card_cache (name COLLATE NOCASE);
-  CREATE INDEX IF NOT EXISTS idx_cache_name_lc ON card_cache (lower(name));
-  CREATE INDEX IF NOT EXISTS idx_cache_set     ON card_cache (set_code, scryfall_id);
-  CREATE INDEX IF NOT EXISTS idx_coll_decks    ON collection_decks (deck);
-  CREATE INDEX IF NOT EXISTS idx_coll_groups   ON collection_groups (group_name);
 
   CREATE TABLE IF NOT EXISTS bulk_meta (
     key   TEXT PRIMARY KEY,
     value TEXT
   );
+
+  CREATE INDEX IF NOT EXISTS idx_cache_name    ON card_cache (name COLLATE NOCASE);
+  CREATE INDEX IF NOT EXISTS idx_cache_name_lc ON card_cache (lower(name));
+  CREATE INDEX IF NOT EXISTS idx_cache_set     ON card_cache (set_code, scryfall_id);
+  CREATE INDEX IF NOT EXISTS idx_coll_deck_id  ON collection (deck_id);
+  CREATE INDEX IF NOT EXISTS idx_coll_groups   ON collection_groups (group_id);
 `);
-
-// ─── Migrations ───────────────────────────────────────────────────────────────
-for (const sql of [
-  'ALTER TABLE collection ADD COLUMN set_name         TEXT',
-  'ALTER TABLE collection ADD COLUMN collector_number TEXT',
-  'ALTER TABLE collection ADD COLUMN image_back       TEXT',
-  'ALTER TABLE card_cache ADD COLUMN set_name         TEXT',
-  'ALTER TABLE card_cache ADD COLUMN collector_number TEXT',
-  'ALTER TABLE card_cache ADD COLUMN image_back       TEXT',
-  'ALTER TABLE collection ADD COLUMN prices_usd_foil   REAL',
-  'ALTER TABLE collection ADD COLUMN prices_usd_etched REAL',
-  'ALTER TABLE card_cache ADD COLUMN prices_usd_foil   REAL',
-  'ALTER TABLE card_cache ADD COLUMN prices_usd_etched REAL',
-  'ALTER TABLE card_cache ADD COLUMN foil_only INTEGER NOT NULL DEFAULT 0',
-  // quantity column may still exist on old DBs — that's fine, we just ignore it
-]) {
-  try { db.exec(sql); } catch { /* column already exists */ }
-}
-
-// Drop legacy groups table
-try { db.exec('DROP TABLE IF EXISTS groups'); } catch { /* ignore */ }
-
-// Backfill collection_decks from legacy deck column
-db.exec(`
-  INSERT OR IGNORE INTO collection_decks (collection_id, deck)
-  SELECT id, deck FROM collection WHERE deck IS NOT NULL AND deck != '';
-`);
-
-db.exec(`
-  INSERT OR IGNORE INTO decks (name)
-  SELECT DISTINCT deck FROM collection_decks WHERE deck IS NOT NULL;
-`);
-
-// ─── Migration: explode quantity>1 rows into individual rows ──────────────────
-// Only runs if the quantity column still exists
-try {
-  const hasQty = db.prepare("PRAGMA table_info(collection)").all()
-    .some(col => col.name === 'quantity');
-
-  if (hasQty) {
-    const multi = db.prepare('SELECT * FROM collection WHERE quantity > 1').all();
-    const explode = db.transaction(() => {
-      for (const row of multi) {
-        const qty = row.quantity;
-        // Update the original row to qty=1
-        db.prepare('UPDATE collection SET quantity = 1 WHERE id = ?').run(row.id);
-        // Insert qty-1 additional copies (same card data, no deck/group)
-        for (let i = 1; i < qty; i++) {
-          const res = db.prepare(`
-            INSERT INTO collection
-              (name, set_code, set_name, collector_number, foil, deck, scryfall_id,
-               image_uri, image_back, mana_cost, type_line, oracle_text, colors, rarity, prices_usd)
-            VALUES
-              (@name, @set_code, @set_name, @collector_number, @foil, NULL, @scryfall_id,
-               @image_uri, @image_back, @mana_cost, @type_line, @oracle_text, @colors, @rarity, @prices_usd)
-          `).run(row);
-          // Extra copies get no deck/group assignments — they're unassigned
-        }
-      }
-    });
-    explode();
-    console.log(`[migration] Exploded ${multi.length} multi-quantity rows into individual copies.`);
-  }
-} catch (err) {
-  console.error('[migration] quantity explosion failed:', err.message);
-}
 
 // ─── Fetch helper ─────────────────────────────────────────────────────────────
 async function scryFetch(url, options = {}) {
@@ -189,22 +117,25 @@ async function refreshBulkCache() {
 
     console.log('[bulk] Downloading default_cards…');
     const upsert = db.prepare(`
-	  INSERT INTO card_cache
-		(scryfall_id, name, set_code, set_name, collector_number, image_uri, image_back,
-		 mana_cost, type_line, oracle_text, colors, rarity, prices_usd, prices_usd_foil, prices_usd_etched, foil_only, cached_at)
-	  VALUES
-		(@scryfall_id, @name, @set_code, @set_name, @collector_number, @image_uri, @image_back,
-		 @mana_cost, @type_line, @oracle_text, @colors, @rarity, @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, datetime('now'))
-	  ON CONFLICT(scryfall_id) DO UPDATE SET
-		name=excluded.name, set_code=excluded.set_code, set_name=excluded.set_name,
-		collector_number=excluded.collector_number,
-		image_uri=excluded.image_uri, image_back=excluded.image_back,
-		mana_cost=excluded.mana_cost, type_line=excluded.type_line,
-		oracle_text=excluded.oracle_text, colors=excluded.colors,
-		rarity=excluded.rarity, prices_usd=excluded.prices_usd, prices_usd_foil=excluded.prices_usd_foil, 
-		prices_usd_etched=excluded.prices_usd_etched, foil_only=excluded.foil_only,
-		cached_at=excluded.cached_at
-	`);
+      INSERT INTO card_cache
+        (scryfall_id, name, set_code, set_name, collector_number, image_uri, image_back,
+         mana_cost, type_line, oracle_text, colors, rarity,
+         prices_usd, prices_usd_foil, prices_usd_etched, foil_only, cached_at)
+      VALUES
+        (@scryfall_id, @name, @set_code, @set_name, @collector_number, @image_uri, @image_back,
+         @mana_cost, @type_line, @oracle_text, @colors, @rarity,
+         @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, datetime('now'))
+      ON CONFLICT(scryfall_id) DO UPDATE SET
+        name=excluded.name, set_code=excluded.set_code, set_name=excluded.set_name,
+        collector_number=excluded.collector_number,
+        image_uri=excluded.image_uri, image_back=excluded.image_back,
+        mana_cost=excluded.mana_cost, type_line=excluded.type_line,
+        oracle_text=excluded.oracle_text, colors=excluded.colors,
+        rarity=excluded.rarity,
+        prices_usd=excluded.prices_usd, prices_usd_foil=excluded.prices_usd_foil,
+        prices_usd_etched=excluded.prices_usd_etched, foil_only=excluded.foil_only,
+        cached_at=excluded.cached_at
+    `);
     const flushBatch = db.transaction((rows) => { for (const r of rows) upsert.run(r); });
 
     let total = 0;
@@ -221,7 +152,6 @@ async function refreshBulkCache() {
   }
 }
 
-// Raw Scryfall prices object → flat DB fields
 function parsePrices(prices = {}) {
   return {
     prices_usd:        prices.usd        ? parseFloat(prices.usd)        : null,
@@ -230,7 +160,6 @@ function parsePrices(prices = {}) {
   };
 }
 
-// Flat DB fields → Scryfall-shaped prices object
 function formatPrices(row) {
   return {
     usd:        row.prices_usd        != null ? String(row.prices_usd)        : null,
@@ -243,8 +172,8 @@ function cardToRow(c) {
   return {
     scryfall_id:      c.id,
     name:             c.name,
-    set_code:         c.set          ?? null,
-    set_name:         c.set_name     ?? null,
+    set_code:         c.set              ?? null,
+    set_name:         c.set_name         ?? null,
     collector_number: c.collector_number ?? null,
     image_uri:        c.image_uris?.normal      ?? c.card_faces?.[0]?.image_uris?.normal ?? null,
     image_back:       c.card_faces?.[1]?.image_uris?.normal ?? null,
@@ -254,7 +183,7 @@ function cardToRow(c) {
     colors:           c.colors       ? JSON.stringify(c.colors) : null,
     rarity:           c.rarity       ?? null,
     ...parsePrices(c.prices),
-	foil_only: (c.foil === true && c.nonfoil === false) ? 1 : 0,
+    foil_only: (c.foil === true && c.nonfoil === false) ? 1 : 0,
   };
 }
 
@@ -310,78 +239,72 @@ function cacheRowToScryfall(c) {
   };
 }
 
-function scryfallCardToRow(card, { foil, deck }) {
+// Merge card_cache metadata into a flat collection row for API responses
+function mergeCache(collRow) {
+  if (!collRow) return null;
+  const cache = collRow.scryfall_id
+    ? db.prepare('SELECT * FROM card_cache WHERE scryfall_id = ?').get(collRow.scryfall_id)
+    : null;
   return {
-    name:             card.name,
-    set_code:         card.set          ?? null,
-    set_name:         card.set_name     ?? null,
-    collector_number: card.collector_number ?? null,
-    foil:             foil ? 1 : 0,
-    deck:             deck || null,
-    scryfall_id:      card.id           ?? null,
-    image_uri:        card.image_uris?.normal ?? card.card_faces?.[0]?.image_uris?.normal ?? null,
-    image_back:       card.card_faces?.[1]?.image_uris?.normal ?? null,
-    mana_cost:        card.mana_cost    ?? null,
-    type_line:        card.type_line    ?? null,
-    oracle_text:      card.oracle_text  ?? null,
-    colors:           card.colors       ? JSON.stringify(card.colors) : null,
-    rarity:           card.rarity       ?? null,
-    ...parsePrices(card.prices),
+    ...collRow,
+    // card metadata fields — null when unmatched
+    set_code:         cache?.set_code         ?? null,
+    set_name:         cache?.set_name         ?? null,
+    collector_number: cache?.collector_number ?? null,
+    image_uri:        cache?.image_uri        ?? null,
+    image_back:       cache?.image_back       ?? null,
+    mana_cost:        cache?.mana_cost        ?? null,
+    type_line:        cache?.type_line        ?? null,
+    oracle_text:      cache?.oracle_text      ?? null,
+    colors:           cache?.colors           ?? null,
+    rarity:           cache?.rarity           ?? null,
+    prices_usd:       cache?.prices_usd       ?? null,
+    prices_usd_foil:  cache?.prices_usd_foil  ?? null,
+    prices_usd_etched:cache?.prices_usd_etched?? null,
+    foil_only:        cache?.foil_only        ?? null,
   };
 }
 
-// Attach decks and groups arrays to a collection row
+// Attach groups array (as group objects { id, name }) to a collection row
 function attachRelations(row) {
-  const decks = db.prepare(
-    'SELECT deck FROM collection_decks WHERE collection_id = ? ORDER BY deck'
-  ).all(row.id).map(r => r.deck);
-  const groups = db.prepare(
-    'SELECT group_name FROM collection_groups WHERE collection_id = ? ORDER BY group_name'
-  ).all(row.id).map(r => r.group_name);
-  return { ...row, decks, groups };
+  const groups = db.prepare(`
+    SELECT g.id, g.name FROM groups g
+    JOIN collection_groups cg ON cg.group_id = g.id
+    WHERE cg.collection_id = ?
+    ORDER BY g.name
+  `).all(row.id);
+  return { ...row, groups };
 }
 
-const saveDecks = db.transaction((collectionId, decks) => {
-  // One deck per physical card
-  const capped = decks.filter(d => d && d.trim()).slice(0, 1);
-  db.prepare('DELETE FROM collection_decks WHERE collection_id = ?').run(collectionId);
-  for (const deck of capped) {
-    db.prepare('INSERT OR IGNORE INTO collection_decks (collection_id, deck) VALUES (?, ?)').run(collectionId, deck.trim());
-  }
-});
-
-const saveGroups = db.transaction((collectionId, groups) => {
+const saveGroups = db.transaction((collectionId, groupIds) => {
   db.prepare('DELETE FROM collection_groups WHERE collection_id = ?').run(collectionId);
-  for (const g of groups) {
-    if (g && g.trim()) {
-      db.prepare('INSERT OR IGNORE INTO collection_groups (collection_id, group_name) VALUES (?, ?)').run(collectionId, g.trim());
+  for (const gid of groupIds) {
+    if (gid != null) {
+      db.prepare('INSERT OR IGNORE INTO collection_groups (collection_id, group_id) VALUES (?, ?)')
+        .run(collectionId, gid);
     }
   }
 });
 
-// ─── Group raw rows into aggregated cards for the frontend ────────────────────
-// Returns one object per (name, set_code, collector_number, foil) combination.
-// Each object includes:
-//   quantity  — number of physical copies
-//   ids       — array of row ids, one per copy
-//   copies    — array of { id, deck, groups } per copy
-// Plus all the card metadata fields from the first row.
+// Group raw rows into aggregated cards for the frontend.
+// Returns one object per (scryfall_id OR name, foil) combination.
 function groupRows(rows) {
   const map = new Map();
   for (const row of rows) {
-    const key = `${row.name}||${row.set_code || ''}||${row.collector_number || ''}||${row.foil}`;
+    const key = `${row.scryfall_id || ''}||${row.name}||${row.foil}`;
     if (!map.has(key)) {
       map.set(key, { ...row, quantity: 0, ids: [], copies: [] });
     }
     const entry = map.get(key);
     entry.quantity++;
     entry.ids.push(row.id);
-    entry.copies.push({ id: row.id, decks: row.decks, groups: row.groups });
+    entry.copies.push({ id: row.id, deck_id: row.deck_id, groups: row.groups });
   }
-  // Aggregate decks/groups across copies for badge display
+  // Aggregate groups across copies for badge display
   for (const entry of map.values()) {
-    entry.decks  = [...new Set(entry.copies.flatMap(c => c.decks  || []))];
-    entry.groups = [...new Set(entry.copies.flatMap(c => c.groups || []))];
+    entry.groups = [...new Map(
+      entry.copies.flatMap(c => (c.groups || []).map(g => [g.id, g]))
+    ).values()];
   }
   return [...map.values()];
 }
@@ -455,28 +378,48 @@ app.get('/api/scryfall/card/:set/:num', async (req, res) => {
 
 // ── Collection — list (grouped) ───────────────────────────────────────────────
 app.get('/api/cards', (req, res) => {
-  const { search, deck, group, foil, colors, sort = 'name', order = 'asc' } = req.query;
-  const allowed = { name: 'c.name', added_at: 'c.added_at', prices_usd: 'c.prices_usd', set_name: 'c.set_name' };
-  const col = allowed[sort] || 'c.name';
+  const { search, deck, group, foil, colors, unmatched, sort = 'name', order = 'asc' } = req.query;
+
+  const sortMap = { name: 'c.name', added_at: 'c.added_at', set_name: 'cc.set_name', prices_usd: 'cc.prices_usd' };
+  const col = sortMap[sort] || 'c.name';
   const dir = order === 'desc' ? 'DESC' : 'ASC';
 
-  let sql = 'SELECT DISTINCT c.* FROM collection c';
+  let sql = `
+    SELECT c.id, c.scryfall_id, c.name, c.deck_id, c.foil, c.added_at
+    FROM collection c
+    LEFT JOIN card_cache cc ON cc.scryfall_id = c.scryfall_id
+  `;
   const params = [];
 
-  if (deck)  { sql += ' JOIN collection_decks  cd ON cd.collection_id = c.id AND cd.deck = ?';       params.push(deck); }
-  if (group) { sql += ' JOIN collection_groups cg ON cg.collection_id = c.id AND cg.group_name = ?'; params.push(group); }
+  if (deck != null) {
+    sql += ' JOIN decks d ON d.id = c.deck_id AND d.id = ?';
+    params.push(parseInt(deck, 10));
+  }
+  if (group != null) {
+    sql += ' JOIN collection_groups cg ON cg.collection_id = c.id AND cg.group_id = ?';
+    params.push(parseInt(group, 10));
+  }
 
   sql += ' WHERE 1=1';
-  if (search) { sql += ' AND lower(c.name) LIKE lower(?)'; params.push(`%${search}%`); }
-  if (foil !== undefined && foil !== '') { sql += ' AND c.foil = ?'; params.push(foil === 'true' ? 1 : 0); }
 
+  if (unmatched === 'true') {
+    sql += ' AND c.scryfall_id IS NULL';
+  }
+  if (search) {
+    sql += ' AND lower(c.name) LIKE lower(?)';
+    params.push(`%${search}%`);
+  }
+  if (foil !== undefined && foil !== '') {
+    sql += ' AND c.foil = ?';
+    params.push(foil === 'true' ? 1 : 0);
+  }
   if (colors) {
     const selected = colors.split(',').map(c => c.trim().toUpperCase()).filter(Boolean);
     if (selected.length > 0) {
       const allColors = ['W', 'U', 'B', 'R', 'G'];
       const excluded = allColors.filter(c => !selected.includes(c));
       for (const excl of excluded) {
-        sql += ` AND (c.colors IS NULL OR c.colors NOT LIKE ?)`;
+        sql += ` AND (cc.colors IS NULL OR cc.colors NOT LIKE ?)`;
         params.push(`%"${excl}"%`);
       }
     }
@@ -484,30 +427,42 @@ app.get('/api/cards', (req, res) => {
 
   sql += ` ORDER BY ${col} ${dir}`;
 
-  const rows = db.prepare(sql).all(...params).map(attachRelations);
+  const rows = db.prepare(sql).all(...params)
+    .map(row => attachRelations(mergeCache(row)));
+
   res.json(groupRows(rows));
 });
 
 // ── Collection — add one copy ─────────────────────────────────────────────────
 app.post('/api/cards', (req, res) => {
-  const { scryfall_card, foil, deck, decks = [], groups = [] } = req.body;
+  const { scryfall_card, foil, deck_id, groups = [] } = req.body;
   if (!scryfall_card?.name) return res.status(400).json({ error: 'scryfall_card with name is required' });
 
-  const row = scryfallCardToRow(scryfall_card, { foil, deck });
-  const result = db.prepare(`
-        INSERT INTO collection
-          (name, set_code, set_name, collector_number, foil, deck, scryfall_id,
-           image_uri, image_back, mana_cost, type_line, oracle_text, colors, rarity,
-           prices_usd, prices_usd_foil, prices_usd_etched)
+  // Ensure card is in cache if we have a scryfall id
+  if (scryfall_card.id) {
+    const existing = db.prepare('SELECT 1 FROM card_cache WHERE scryfall_id = ?').get(scryfall_card.id);
+    if (!existing) {
+      db.prepare(`
+        INSERT OR IGNORE INTO card_cache
+          (scryfall_id, name, set_code, set_name, collector_number, image_uri, image_back,
+           mana_cost, type_line, oracle_text, colors, rarity,
+           prices_usd, prices_usd_foil, prices_usd_etched, foil_only, cached_at)
         VALUES
-          (@name, @set_code, @set_name, @collector_number, @foil, @deck, @scryfall_id,
-           @image_uri, @image_back, @mana_cost, @type_line, @oracle_text, @colors, @rarity,
-           @prices_usd, @prices_usd_foil, @prices_usd_etched)
-  `).run(row);
+          (@scryfall_id, @name, @set_code, @set_name, @collector_number, @image_uri, @image_back,
+           @mana_cost, @type_line, @oracle_text, @colors, @rarity,
+           @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, datetime('now'))
+      `).run(cardToRow(scryfall_card));
+    }
+  }
+
+  const isFoil = foil ? 1 : (scryfall_card.foil === true && scryfall_card.nonfoil === false ? 1 : 0);
+
+  const result = db.prepare(`
+    INSERT INTO collection (scryfall_id, name, deck_id, foil)
+    VALUES (?, ?, ?, ?)
+  `).run(scryfall_card.id ?? null, scryfall_card.name, deck_id ?? null, isFoil);
 
   const id = result.lastInsertRowid;
-  const allDecks = [...new Set([...(deck ? [deck] : []), ...decks])];
-  saveDecks(id, allDecks);
   saveGroups(id, groups);
 
   res.status(201).json({ id });
@@ -518,21 +473,31 @@ app.post('/api/cards/copies', (req, res) => {
   const { scryfall_card, foil, count = 1 } = req.body;
   if (!scryfall_card?.name) return res.status(400).json({ error: 'scryfall_card with name is required' });
 
-  const row = scryfallCardToRow(scryfall_card, { foil, deck: null });
-  const insertStmt = db.prepare(`
-        INSERT INTO collection
-          (name, set_code, set_name, collector_number, foil, deck, scryfall_id,
-           image_uri, image_back, mana_cost, type_line, oracle_text, colors, rarity,
-           prices_usd, prices_usd_foil, prices_usd_etched)
+  if (scryfall_card.id) {
+    const existing = db.prepare('SELECT 1 FROM card_cache WHERE scryfall_id = ?').get(scryfall_card.id);
+    if (!existing) {
+      db.prepare(`
+        INSERT OR IGNORE INTO card_cache
+          (scryfall_id, name, set_code, set_name, collector_number, image_uri, image_back,
+           mana_cost, type_line, oracle_text, colors, rarity,
+           prices_usd, prices_usd_foil, prices_usd_etched, foil_only, cached_at)
         VALUES
-          (@name, @set_code, @set_name, @collector_number, @foil, @deck, @scryfall_id,
-           @image_uri, @image_back, @mana_cost, @type_line, @oracle_text, @colors, @rarity,
-           @prices_usd, @prices_usd_foil, @prices_usd_etched)
+          (@scryfall_id, @name, @set_code, @set_name, @collector_number, @image_uri, @image_back,
+           @mana_cost, @type_line, @oracle_text, @colors, @rarity,
+           @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, datetime('now'))
+      `).run(cardToRow(scryfall_card));
+    }
+  }
+
+  const isFoil = foil ? 1 : (scryfall_card.foil === true && scryfall_card.nonfoil === false ? 1 : 0);
+  const insertStmt = db.prepare(`
+    INSERT INTO collection (scryfall_id, name, deck_id, foil) VALUES (?, ?, NULL, ?)
   `);
 
   const ids = db.transaction(() => {
     const result = [];
-    for (let i = 0; i < count; i++) result.push(insertStmt.run(row).lastInsertRowid);
+    for (let i = 0; i < count; i++)
+      result.push(insertStmt.run(scryfall_card.id ?? null, scryfall_card.name, isFoil).lastInsertRowid);
     return result;
   })();
 
@@ -540,22 +505,24 @@ app.post('/api/cards/copies', (req, res) => {
 });
 
 // ── Collection — update one copy ──────────────────────────────────────────────
+// Supports: foil, deck_id, scryfall_id (to fix unmatched), groups (array of group IDs)
 app.patch('/api/cards/:id', (req, res) => {
-  const { foil, deck, decks, groups } = req.body;
+  const { foil, deck_id, scryfall_id, groups } = req.body;
   const id = req.params.id;
   const updates = [], params = [];
 
-  if (foil !== undefined) { updates.push('foil = ?'); params.push(foil ? 1 : 0); }
-  if (deck !== undefined) { updates.push('deck = ?'); params.push(deck); }
+  if (foil !== undefined)        { updates.push('foil = ?');        params.push(foil ? 1 : 0); }
+  if (deck_id !== undefined)     { updates.push('deck_id = ?');     params.push(deck_id ?? null); }
+  if (scryfall_id !== undefined) { updates.push('scryfall_id = ?'); params.push(scryfall_id ?? null); }
 
   if (updates.length) {
     params.push(id);
     db.prepare(`UPDATE collection SET ${updates.join(', ')} WHERE id = ?`).run(...params);
   }
-  if (decks  !== undefined) saveDecks(id, decks);
   if (groups !== undefined) saveGroups(id, groups);
 
-  res.json(attachRelations(db.prepare('SELECT * FROM collection WHERE id = ?').get(id)));
+  const row = db.prepare('SELECT * FROM collection WHERE id = ?').get(id);
+  res.json(attachRelations(mergeCache(row)));
 });
 
 // ── Collection — delete one copy ──────────────────────────────────────────────
@@ -568,32 +535,45 @@ app.delete('/api/cards/:id', (req, res) => {
 app.get('/api/stats', (req, res) => {
   const totals = db.prepare(`
     SELECT
-      COUNT(*)                                          AS total,
-      COUNT(DISTINCT name || COALESCE(set_code,'') || COALESCE(collector_number,'')) AS unique_count,
-      SUM(CASE WHEN foil = 1 THEN 1 ELSE 0 END)        AS foils,
-      SUM(CASE WHEN foil = 1
-         THEN COALESCE(prices_usd_foil, prices_usd_etched, prices_usd, 0)
-         ELSE COALESCE(prices_usd, 0)
-       END) AS total_value
-    FROM collection
+      COUNT(*)                                                             AS total,
+      COUNT(DISTINCT COALESCE(c.scryfall_id, c.name))                     AS unique_count,
+      SUM(CASE WHEN c.foil = 1 THEN 1 ELSE 0 END)                         AS foils,
+      SUM(CASE WHEN c.foil = 1
+            THEN COALESCE(cc.prices_usd_foil, cc.prices_usd_etched, cc.prices_usd, 0)
+            ELSE COALESCE(cc.prices_usd, 0)
+          END)                                                             AS total_value
+    FROM collection c
+    LEFT JOIN card_cache cc ON cc.scryfall_id = c.scryfall_id
   `).get();
 
   const byRarity = db.prepare(`
-    SELECT COALESCE(rarity, 'unknown') AS rarity, COUNT(*) AS n
-    FROM collection GROUP BY rarity ORDER BY rarity
+    SELECT COALESCE(cc.rarity, 'unknown') AS rarity, COUNT(*) AS n
+    FROM collection c
+    LEFT JOIN card_cache cc ON cc.scryfall_id = c.scryfall_id
+    GROUP BY rarity ORDER BY rarity
   `).all();
 
   const byDeck = db.prepare(`
-    SELECT cd.deck, COUNT(*) AS n, SUM(COALESCE(c.prices_usd, 0)) AS value
-    FROM collection_decks cd
-    JOIN collection c ON c.id = cd.collection_id
-    GROUP BY cd.deck ORDER BY n DESC
+    SELECT d.id, d.name AS deck, COUNT(*) AS n,
+      SUM(CASE WHEN c.foil = 1
+            THEN COALESCE(cc.prices_usd_foil, cc.prices_usd_etched, cc.prices_usd, 0)
+            ELSE COALESCE(cc.prices_usd, 0)
+          END) AS value
+    FROM decks d
+    JOIN collection c ON c.deck_id = d.id
+    LEFT JOIN card_cache cc ON cc.scryfall_id = c.scryfall_id
+    GROUP BY d.id ORDER BY n DESC
   `).all();
 
   const unassigned = db.prepare(`
-    SELECT COUNT(*) AS n, SUM(COALESCE(prices_usd, 0)) AS value
+    SELECT COUNT(*) AS n,
+      SUM(CASE WHEN c.foil = 1
+            THEN COALESCE(cc.prices_usd_foil, cc.prices_usd_etched, cc.prices_usd, 0)
+            ELSE COALESCE(cc.prices_usd, 0)
+          END) AS value
     FROM collection c
-    WHERE NOT EXISTS (SELECT 1 FROM collection_decks cd WHERE cd.collection_id = c.id)
+    LEFT JOIN card_cache cc ON cc.scryfall_id = c.scryfall_id
+    WHERE c.deck_id IS NULL
   `).get();
 
   if (unassigned.n > 0) byDeck.push({ deck: 'Unassigned', n: unassigned.n, value: unassigned.value });
@@ -602,89 +582,144 @@ app.get('/api/stats', (req, res) => {
 });
 
 // ── Decks ─────────────────────────────────────────────────────────────────────
-
 app.get('/api/decks', (req, res) => {
-  const rows = db.prepare('SELECT name FROM decks ORDER BY name').all();
+  const rows = db.prepare('SELECT * FROM decks ORDER BY name').all();
 
-  const result = rows.map(({ name }) => {
-    const { cardCount } = db.prepare(`
-      SELECT COUNT(*) AS cardCount FROM collection_decks WHERE deck = ?
-    `).get(name);
+  const result = rows.map((deck) => {
+    const { cardCount } = db.prepare(
+      'SELECT COUNT(*) AS cardCount FROM collection WHERE deck_id = ?'
+    ).get(deck.id);
 
-    const colorRows = db.prepare(`
-      SELECT DISTINCT je.value AS color
-      FROM collection_decks cd
-      JOIN collection c ON c.id = cd.collection_id
-      JOIN json_each(c.colors) je ON 1=1
-      WHERE cd.deck = ? AND c.colors IS NOT NULL AND c.colors != '[]'
-      ORDER BY je.value
-    `).all(name);
-
-    return { name, cardCount, colors: colorRows.map(r => r.color) };
+    return {
+      id:           deck.id,
+      name:         deck.name,
+      colors:       deck.colors ? JSON.parse(deck.colors) : [],
+      description:  deck.description,
+      format:       deck.format,
+      commander_id: deck.commander_id,
+      created_at:   deck.created_at,
+      cardCount,
+    };
   });
 
   res.json(result);
 });
 
 app.post('/api/decks', (req, res) => {
-  const { name } = req.body;
+  const { name, colors, description, format } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: 'name is required' });
   try {
-    db.prepare('INSERT INTO decks (name) VALUES (?)').run(name.trim());
-    res.status(201).json({ name: name.trim(), cardCount: 0, colors: [] });
+    // Insert with commander_id=NULL; caller can PATCH to set it afterward
+    const result = db.prepare(
+      'INSERT INTO decks (name, colors, description, format, commander_id) VALUES (?, ?, ?, ?, NULL)'
+    ).run(name.trim(), colors ? JSON.stringify(colors) : null, description ?? null, format ?? null);
+
+    res.status(201).json({
+      id: result.lastInsertRowid, name: name.trim(),
+      colors: colors ?? [], description: description ?? null, format: format ?? null,
+      commander_id: null, cardCount: 0,
+    });
   } catch {
     res.status(409).json({ error: 'Deck already exists' });
   }
 });
 
-app.patch('/api/decks/:name', (req, res) => {
-  const oldName = decodeURIComponent(req.params.name);
-  const newName = req.body.name?.trim();
-  if (!newName) return res.status(400).json({ error: 'name is required' });
+app.patch('/api/decks/:id', (req, res) => {
+  const deckId = parseInt(req.params.id, 10);
+  const { name, colors, description, format, commander_id } = req.body;
+  const updates = [], params = [];
+
+  if (name        !== undefined) { updates.push('name = ?');         params.push(name.trim()); }
+  if (colors      !== undefined) { updates.push('colors = ?');       params.push(colors ? JSON.stringify(colors) : null); }
+  if (description !== undefined) { updates.push('description = ?');  params.push(description ?? null); }
+  if (format      !== undefined) { updates.push('format = ?');       params.push(format ?? null); }
+  if (commander_id !== undefined) {
+    // Validate: if format is commander, referenced card must have Legendary in type_line
+    if (commander_id != null) {
+      const deck = db.prepare('SELECT format FROM decks WHERE id = ?').get(deckId);
+      const deckFormat = format ?? deck?.format;
+      if (deckFormat === 'commander') {
+        const card = db.prepare(`
+          SELECT cc.type_line FROM collection c
+          LEFT JOIN card_cache cc ON cc.scryfall_id = c.scryfall_id
+          WHERE c.id = ?
+        `).get(commander_id);
+        if (!card) return res.status(404).json({ error: 'Commander card not found in collection' });
+        if (!card.type_line?.includes('Legendary')) {
+          return res.status(400).json({ error: 'Commander must be a Legendary card' });
+        }
+      }
+    }
+    updates.push('commander_id = ?');
+    params.push(commander_id ?? null);
+  }
+
+  if (!updates.length) return res.status(400).json({ error: 'No fields to update' });
+
   try {
-    db.transaction(() => {
-      db.prepare('INSERT OR IGNORE INTO decks (name) VALUES (?)').run(newName);
-      db.prepare('UPDATE collection_decks SET deck = ? WHERE deck = ?').run(newName, oldName);
-      db.prepare('UPDATE collection SET deck = ? WHERE deck = ?').run(newName, oldName);
-      db.prepare('DELETE FROM decks WHERE name = ?').run(oldName);
-    })();
-    res.json({ name: newName });
+    params.push(deckId);
+    db.prepare(`UPDATE decks SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+    const deck = db.prepare('SELECT * FROM decks WHERE id = ?').get(deckId);
+    if (!deck) return res.status(404).json({ error: 'Deck not found' });
+    res.json({
+      ...deck,
+      colors: deck.colors ? JSON.parse(deck.colors) : [],
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.delete('/api/decks/:name', (req, res) => {
-  const name = decodeURIComponent(req.params.name);
+app.delete('/api/decks/:id', (req, res) => {
+  const deckId = parseInt(req.params.id, 10);
   db.transaction(() => {
-    db.prepare('DELETE FROM collection_decks WHERE deck = ?').run(name);
-    db.prepare('UPDATE collection SET deck = NULL WHERE deck = ?').run(name);
-    db.prepare('DELETE FROM decks WHERE name = ?').run(name);
+    db.prepare('UPDATE collection SET deck_id = NULL WHERE deck_id = ?').run(deckId);
+    db.prepare('DELETE FROM decks WHERE id = ?').run(deckId);
   })();
   res.json({ ok: true });
 });
 
 // ── Groups ────────────────────────────────────────────────────────────────────
 app.get('/api/groups', (req, res) => {
-  res.json(db.prepare('SELECT DISTINCT group_name FROM collection_groups ORDER BY group_name').all().map(r => r.group_name));
+  res.json(db.prepare('SELECT id, name, description FROM groups ORDER BY name').all());
+});
+
+app.post('/api/groups', (req, res) => {
+  const { name, description } = req.body;
+  if (!name?.trim()) return res.status(400).json({ error: 'name is required' });
+  try {
+    const result = db.prepare('INSERT INTO groups (name, description) VALUES (?, ?)').run(name.trim(), description ?? null);
+    res.status(201).json({ id: result.lastInsertRowid, name: name.trim(), description: description ?? null });
+  } catch {
+    res.status(409).json({ error: 'Group already exists' });
+  }
+});
+
+app.patch('/api/groups/:id', (req, res) => {
+  const { name, description } = req.body;
+  const updates = [], params = [];
+  if (name        !== undefined) { updates.push('name = ?');        params.push(name.trim()); }
+  if (description !== undefined) { updates.push('description = ?'); params.push(description ?? null); }
+  if (!updates.length) return res.status(400).json({ error: 'No fields to update' });
+  try {
+    params.push(req.params.id);
+    db.prepare(`UPDATE groups SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+    res.json(db.prepare('SELECT id, name, description FROM groups WHERE id = ?').get(req.params.id));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/groups/:id', (req, res) => {
+  db.prepare('DELETE FROM groups WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
 });
 
 // ── Bulk import ───────────────────────────────────────────────────────────────
 app.post('/api/import', (req, res) => {
   const lines      = (req.body.text || '').split('\n').map(l => l.trim()).filter(Boolean);
-  const globalDeck = req.body.deck || null;
+  const globalDeckId = req.body.deck_id ? parseInt(req.body.deck_id, 10) : null;
   const added = [], failed = [];
-
-  const insertStmt = db.prepare(`
-        INSERT INTO collection
-          (name, set_code, set_name, collector_number, foil, deck, scryfall_id,
-           image_uri, image_back, mana_cost, type_line, oracle_text, colors, rarity,
-           prices_usd, prices_usd_foil, prices_usd_etched)
-        VALUES
-          (@name, @set_code, @set_name, @collector_number, @foil, @deck, @scryfall_id,
-           @image_uri, @image_back, @mana_cost, @type_line, @oracle_text, @colors, @rarity,
-           @prices_usd, @prices_usd_foil, @prices_usd_etched)
-  `);
 
   for (const line of lines) {
     try {
@@ -697,7 +732,13 @@ app.post('/api/import', (req, res) => {
       const name            = match[3].trim();
       const setCode         = match[4]?.toLowerCase() ?? null;
       const collectorNumber = match[5] ?? null;
-      const deck            = deckPart || globalDeck;
+
+      // Resolve deck_id: prefer pipe-delimited deck name, then global
+      let deckId = globalDeckId;
+      if (deckPart) {
+        const deckRow = db.prepare('SELECT id FROM decks WHERE lower(name) = lower(?)').get(deckPart.trim());
+        if (deckRow) deckId = deckRow.id;
+      }
 
       let cached = null;
       if (setCode && collectorNumber) {
@@ -709,38 +750,15 @@ app.post('/api/import', (req, res) => {
       if (!cached) {
         cached = db.prepare('SELECT * FROM card_cache WHERE lower(name) = lower(?) LIMIT 1').get(name);
       }
-	// Auto-detect foil-only printings
-	if (cached && cached.foil_only) {
-	  baseRow.foil = 1;
-	}
-	if (cached?.foil_only) {
-  baseRow.foil = 1;
-}
-      const baseRow = {
-        name,
-        set_code:         cached?.set_code         ?? null,
-        set_name:         cached?.set_name         ?? null,
-        collector_number: cached?.collector_number ?? null,
-        foil:             foil ? 1 : 0,
-        deck,
-        scryfall_id:      cached?.scryfall_id      ?? null,
-        image_uri:        cached?.image_uri        ?? null,
-        image_back:       cached?.image_back       ?? null,
-        mana_cost:        cached?.mana_cost        ?? null,
-        type_line:        cached?.type_line        ?? null,
-        oracle_text:      cached?.oracle_text      ?? null,
-        colors:           cached?.colors           ?? null,
-        rarity:           cached?.rarity           ?? null,
-        prices_usd:       cached?.prices_usd       ?? null,
-        prices_usd_foil:  cached?.prices_usd_foil  ?? null,
-        prices_usd_etched: cached?.prices_usd_etched ?? null,
-      };
 
-      // Insert one row per physical copy
+      const isFoil = foil || (cached?.foil_only ? 1 : 0);
+
       db.transaction(() => {
         for (let i = 0; i < quantity; i++) {
-          const result = insertStmt.run(baseRow);
-          if (deck) saveDecks(result.lastInsertRowid, [deck]);
+          db.prepare(`
+            INSERT INTO collection (scryfall_id, name, deck_id, foil)
+            VALUES (?, ?, ?, ?)
+          `).run(cached?.scryfall_id ?? null, name, deckId, isFoil ? 1 : 0);
         }
       })();
 
@@ -755,7 +773,15 @@ app.post('/api/import', (req, res) => {
 
 // ── CSV export ────────────────────────────────────────────────────────────────
 app.get('/api/export/csv', (req, res) => {
-  const rows   = db.prepare('SELECT * FROM collection ORDER BY name').all();
+  const rows = db.prepare(`
+    SELECT c.id, c.name, cc.set_code, cc.set_name, cc.collector_number,
+           c.foil, d.name AS deck, cc.rarity, cc.prices_usd, c.added_at
+    FROM collection c
+    LEFT JOIN card_cache cc ON cc.scryfall_id = c.scryfall_id
+    LEFT JOIN decks d ON d.id = c.deck_id
+    ORDER BY c.name
+  `).all();
+
   const header = 'id,name,set_code,set_name,collector_number,foil,deck,rarity,prices_usd,added_at\n';
   const body   = rows.map(r =>
     [r.id, `"${r.name}"`, r.set_code ?? '', `"${r.set_name ?? ''}"`,

@@ -35,7 +35,7 @@ export default function App() {
   const fetchDecks = useCallback(async () => {
     const res = await fetch(`${API}/decks`);
     const data = await res.json();
-    setDecks(data.map(d => d.name));  // ← this line is critical
+    setDecks(data);
   }, []);
 
   const fetchGroups = useCallback(async () => {

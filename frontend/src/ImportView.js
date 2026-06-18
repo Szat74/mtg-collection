@@ -61,7 +61,7 @@ export default function ImportView({ decks, refresh, showToast, setView }) {
             <label>Default Deck (optional)
               <select value={defaultDeck} onChange={e => setDefaultDeck(e.target.value)}>
                 <option value="">— none —</option>
-                {decks.map(d => <option key={d} value={d}>{d}</option>)}
+                {decks.map(d => <option key={d.id} value={d.name}>{d.name}</option>)}
                 <option value="__new__">+ New deck…</option>
               </select>
             </label>

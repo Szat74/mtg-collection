@@ -197,9 +197,9 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
             <label>Decks <span className="label-hint">(select multiple)</span></label>
             <div className="multi-select-list">
               {decks.map(d => (
-                <label key={d} className="multi-select-item">
-                  <input type="checkbox" checked={selDecks.includes(d)} onChange={() => toggleDeck(d)} />
-                  {d}
+                <label key={d.id} className="multi-select-item">
+                  <input type="checkbox" checked={selDecks.includes(d.name)} onChange={() => toggleDeck(d.name)} />
+                  {d.name}
                 </label>
               ))}
             </div>
