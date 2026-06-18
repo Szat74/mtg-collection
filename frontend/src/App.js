@@ -22,25 +22,36 @@ export default function App() {
   };
 
   const fetchCards = useCallback(async (params = {}) => {
-    const qs = new URLSearchParams(params).toString();
-    const res = await fetch(`${API}/cards${qs ? '?' + qs : ''}`);
-    setCards(await res.json());
+    try {
+      const qs = new URLSearchParams(params).toString();
+      const res = await fetch(`${API}/cards${qs ? '?' + qs : ''}`);
+      if (!res.ok) return;
+      setCards(await res.json());
+    } catch {}
   }, []);
 
   const fetchStats = useCallback(async () => {
-    const res = await fetch(`${API}/stats`);
-    setStats(await res.json());
+    try {
+      const res = await fetch(`${API}/stats`);
+      if (!res.ok) return;
+      setStats(await res.json());
+    } catch {}
   }, []);
 
   const fetchDecks = useCallback(async () => {
-    const res = await fetch(`${API}/decks`);
-    const data = await res.json();
-    setDecks(data);
+    try {
+      const res = await fetch(`${API}/decks`);
+      if (!res.ok) return;
+      setDecks(await res.json());
+    } catch {}
   }, []);
 
   const fetchGroups = useCallback(async () => {
-    const res = await fetch(`${API}/groups`);
-    setGroups(await res.json());
+    try {
+      const res = await fetch(`${API}/groups`);
+      if (!res.ok) return;
+      setGroups(await res.json());
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -87,6 +98,7 @@ export default function App() {
 		  <>
             <CollectionView
               cards={cards} decks={decks} groups={groups}
+              onGroupCreated={g => setGroups(prev => [...prev, g].sort((a, b) => a.name.localeCompare(b.name)))}
               fetchCards={fetchCards} refresh={refresh} showToast={showToast}
             />
             <DeckManager onDecksChanged={refresh} />

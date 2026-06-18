@@ -4,3 +4,4 @@ data/
 .env
 .DS_Store
 frontend/build/
+docker-compose.dev.yml

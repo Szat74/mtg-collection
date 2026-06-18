@@ -13,12 +13,11 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
   const [selectedCard, setSelectedCard] = useState(null);
 
   // Add-form state
-  const [qty, setQty]             = useState(1);
-  const [foil, setFoil]           = useState(false);
-  const [selDecks, setSelDecks]   = useState([]);
-  const [newDeck, setNewDeck]     = useState('');
-  const [selGroups, setSelGroups] = useState([]);
-  const [newGroup, setNewGroup]   = useState('');
+  const [qty, setQty]               = useState(1);
+  const [foil, setFoil]             = useState(false);
+  const [selDeckId, setSelDeckId]   = useState('');
+  const [selGroupIds, setSelGroupIds] = useState(new Set());
+  const [groupSearch, setGroupSearch] = useState('');
 
   const debounce = useRef(null);
 
@@ -70,19 +69,32 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
     setLoadingPrints(false);
   };
 
-  // ── Deck / group helpers ───────────────────────────────────────────────────
-  const toggleDeck  = (d) => setSelDecks(prev  => prev.includes(d)  ? prev.filter(x => x !== d)  : [...prev, d]);
-  const toggleGroup = (g) => setSelGroups(prev => prev.includes(g) ? prev.filter(x => x !== g) : [...prev, g]);
+  const toggleGroup = (gId) =>
+    setSelGroupIds(prev => {
+      const next = new Set(prev);
+      next.has(gId) ? next.delete(gId) : next.add(gId);
+      return next;
+    });
+
+  const createGroupByName = async (name) => {
+    if (!name) return;
+    const res = await fetch(`${API}/groups`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (res.ok) {
+      const g = await res.json();
+      refresh(); // so the groups list updates
+      setSelGroupIds(prev => new Set([...prev, g.id]));
+      setGroupSearch('');
+    }
+  };
 
   // ── Add to collection ──────────────────────────────────────────────────────
   const addCard = async () => {
     if (!selectedCard) return;
-    const finalDecks = newDeck.trim()
-      ? [...new Set([...selDecks, newDeck.trim()])]
-      : selDecks;
-    const finalGroups = newGroup.trim()
-      ? [...new Set([...selGroups, newGroup.trim()])]
-      : selGroups;
+
     const res = await fetch(`${API}/cards`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -90,8 +102,8 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
         scryfall_card: selectedCard,
         quantity: qty,
         foil,
-        decks: finalDecks,
-        groups: finalGroups,
+        deck_id: selDeckId ? parseInt(selDeckId, 10) : null,
+        groups: [...selGroupIds],
       }),
     });
 
@@ -99,9 +111,10 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
       showToast(`Added ${selectedCard.name} ×${qty}${foil ? ' (foil)' : ''}`);
       refresh();
       setQuery(''); setSelectedName(null); setSelectedCard(null); setPrintings([]);
-      setQty(1); setFoil(false); setSelDecks([]); setNewDeck(''); setSelGroups([]);
+      setQty(1); setFoil(false); setSelDeckId(''); setSelGroupIds(new Set()); setGroupSearch('');
     } else {
-      showToast('Failed to add card', 'error');
+      const err = await res.json().catch(() => ({}));
+      showToast(err.error || 'Failed to add card', 'error');
     }
   };
 
@@ -194,37 +207,71 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
               </label>
             </div>
 
-            <label>Decks <span className="label-hint">(select multiple)</span></label>
-            <div className="multi-select-list">
-              {decks.map(d => (
-                <label key={d.id} className="multi-select-item">
-                  <input type="checkbox" checked={selDecks.includes(d.name)} onChange={() => toggleDeck(d.name)} />
-                  {d.name}
-                </label>
+            <label>Deck</label>
+            <select
+              value={selDeckId}
+              onChange={e => setSelDeckId(e.target.value)}
+            >
+              <option value="">— No deck —</option>
+              {decks.filter(d => {
+                if (d.format !== 'commander' || !d.commander_id || !d.colors?.length) return true;
+                const cardIdentity = selectedCard?.color_identity || [];
+                if (!cardIdentity.length) return true;
+                return cardIdentity.every(c => d.colors.includes(c));
+              }).map(d => (
+                <option key={d.id} value={d.id}>
+                  {d.name}{d.format === 'commander' && !d.commander_id ? ' ⚠ no commander' : ''}
+                </option>
               ))}
-            </div>
-            <input
-              className="new-deck-input"
-              placeholder="+ New deck name"
-              value={newDeck}
-              onChange={e => setNewDeck(e.target.value)}
-            />
+            </select>
 
-            <label>Groups <span className="label-hint">(select multiple)</span></label>
-            <div className="multi-select-list">
-              {(groups || []).map(g => (
-                <label key={g} className="multi-select-item">
-                  <input type="checkbox" checked={selGroups.includes(g)} onChange={() => toggleGroup(g)} />
-                  {g}
-                </label>
-              ))}
+            <label>Groups</label>
+            {selGroupIds.size > 0 && (
+              <div className="group-selected-list">
+                {(groups || []).filter(g => selGroupIds.has(g.id)).map(g => (
+                  <label key={g.id} className="multi-select-item">
+                    <input type="checkbox" checked onChange={() => toggleGroup(g.id)} />
+                    {g.name}
+                  </label>
+                ))}
+              </div>
+            )}
+            <div className="group-search-wrap">
+              <input
+                className="new-group-input"
+                placeholder="Search or create tag…"
+                value={groupSearch}
+                onChange={e => setGroupSearch(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    const q = groupSearch.trim();
+                    const match = (groups || []).find(g => g.name.toLowerCase() === q.toLowerCase());
+                    if (match) { toggleGroup(match.id); setGroupSearch(''); }
+                    else if (q) createGroupByName(q);
+                  }
+                  if (e.key === 'Escape') setGroupSearch('');
+                }}
+              />
+              {groupSearch.trim() && (
+                <div className="group-dropdown">
+                  {(groups || [])
+                    .filter(g => !selGroupIds.has(g.id) && g.name.toLowerCase().includes(groupSearch.toLowerCase()))
+                    .map(g => (
+                      <div key={g.id} className="group-dropdown-item"
+                        onMouseDown={e => { e.preventDefault(); toggleGroup(g.id); setGroupSearch(''); }}>
+                        {g.name}
+                      </div>
+                    ))
+                  }
+                  {!(groups || []).some(g => g.name.toLowerCase() === groupSearch.trim().toLowerCase()) && (
+                    <div className="group-dropdown-item group-dropdown-create"
+                      onMouseDown={e => { e.preventDefault(); createGroupByName(groupSearch.trim()); }}>
+                      + Create "{groupSearch.trim()}"
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
-            <input
-              className="new-group-input"
-              placeholder="+ New group name"
-              value={newGroup}
-              onChange={e => setNewGroup(e.target.value)}
-            />
 
             <button className="btn-primary btn-add" onClick={addCard}>
               Add to Collection
