@@ -10,7 +10,7 @@ const EXAMPLE = `4 Lightning Bolt
 
 export default function ImportView({ decks, refresh, showToast, setView }) {
   const [text, setText] = useState('');
-  const [defaultDeck, setDefaultDeck] = useState('');
+  const [defaultDeck, setDefaultDeck] = useState('');  // deck id or '' or '__new__'
   const [newDeck, setNewDeck] = useState('');
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -19,12 +19,25 @@ export default function ImportView({ decks, refresh, showToast, setView }) {
     if (!text.trim()) return;
     setLoading(true);
     setResults(null);
-    const finalDeck = defaultDeck === '__new__' ? newDeck : defaultDeck;
+    let deckId = null;
+    if (defaultDeck === '__new__' && newDeck.trim()) {
+      // Create the deck first, then use its id
+      try {
+        const dr = await fetch(`${API}/decks`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newDeck.trim() }),
+        });
+        if (dr.ok) { const d = await dr.json(); deckId = d.id; refresh(); }
+      } catch {}
+    } else if (defaultDeck && defaultDeck !== '__new__') {
+      deckId = parseInt(defaultDeck, 10);
+    }
     try {
       const res = await fetch(`${API}/import`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, deck: finalDeck }),
+        body: JSON.stringify({ text, deck_id: deckId }),
       });
       const data = await res.json();
       setResults(data);
@@ -61,7 +74,7 @@ export default function ImportView({ decks, refresh, showToast, setView }) {
             <label>Default Deck (optional)
               <select value={defaultDeck} onChange={e => setDefaultDeck(e.target.value)}>
                 <option value="">— none —</option>
-                {decks.map(d => <option key={d.id} value={d.name}>{d.name}</option>)}
+                {decks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                 <option value="__new__">+ New deck…</option>
               </select>
             </label>
