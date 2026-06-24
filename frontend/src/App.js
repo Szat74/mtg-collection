@@ -5,7 +5,7 @@ import AddCardView from './AddCardView';
 import ImportView from './ImportView';
 import StatsView from './StatsView';
 import SettingsView from './SettingsView';
-import { DeckManager } from './DeckManager';
+import DeckView from './DeckView';
 
 const API = '/api';
 
@@ -75,6 +75,7 @@ export default function App() {
           <nav className="nav">
             {[
               { id: 'collection', label: 'Collection' },
+              { id: 'decks',      label: 'Decks' },
               { id: 'add',        label: 'Add Card' },
               { id: 'import',     label: 'Bulk Import' },
               { id: 'stats',      label: 'Stats' },
@@ -94,14 +95,14 @@ export default function App() {
 
       <main className="app-main">
         {view === 'collection' && (
-		  <>
-            <CollectionView
-              cards={cards} decks={decks} groups={groups}
-              onGroupCreated={g => setGroups(prev => [...prev, g].sort((a, b) => a.name.localeCompare(b.name)))}
-              fetchCards={fetchCards} refresh={refresh} showToast={showToast}
-            />
-            <DeckManager onDecksChanged={refresh} />
-          </>
+          <CollectionView
+            cards={cards} decks={decks} groups={groups}
+            onGroupCreated={g => setGroups(prev => [...prev, g].sort((a, b) => a.name.localeCompare(b.name)))}
+            fetchCards={fetchCards} refresh={refresh} showToast={showToast}
+          />
+        )}
+        {view === 'decks' && (
+          <DeckView decks={decks} refresh={refresh} showToast={showToast} />
         )}
         {view === 'add' && (
           <AddCardView

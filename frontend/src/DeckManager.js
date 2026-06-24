@@ -56,70 +56,53 @@ function ColorPicker({ value, onChange }) {
   );
 }
 
-// ── Commander picker (inside DeckRow for commander-format decks) ──────────────
-function CommanderPicker({ deck, onSave }) {
-  const [open, setOpen]         = useState(false);
-  const [query, setQuery]       = useState('');
-  const [legendaries, setLegendaries] = useState([]);
-  const [loading, setLoading]   = useState(false);
+// ── Commander / Partner picker ────────────────────────────────────────────────
+function CmdPicker({ deck, label, currentName, field, filterFn, emptyMsg, onSave }) {
+  const [open, setOpen]     = useState(false);
+  const [query, setQuery]   = useState('');
+  const [cards, setCards]   = useState([]);
+  const [loading, setLoading] = useState(false);
 
-  const loadLegendaries = async () => {
+  const load = async () => {
     setLoading(true);
     try {
       const res  = await fetch(`${API}/cards?deck=${deck.id}`);
       const data = await res.json();
-      setLegendaries(data.filter(c => c.type_line?.includes('Legendary')));
-    } catch { setLegendaries([]); }
+      setCards(filterFn ? data.filter(filterFn) : data);
+    } catch { setCards([]); }
     setLoading(false);
   };
 
-  const openPicker = () => { setOpen(true); setQuery(''); loadLegendaries(); };
+  const openPicker = () => { setOpen(true); setQuery(''); load(); };
   const close      = () => { setOpen(false); setQuery(''); };
+  const pick       = (card) => { onSave(deck.id, { [field]: card.ids[0] }); close(); };
+  const clear      = () => { onSave(deck.id, { [field]: null }); };
 
-  const pick = (card) => {
-    // Use the first copy id as commander_id
-    onSave(deck.id, { commander_id: card.ids[0] });
-    close();
-  };
-
-  const clear = () => { onSave(deck.id, { commander_id: null }); };
-
-  const filtered = legendaries.filter(c =>
-    !query || c.name.toLowerCase().includes(query.toLowerCase())
-  );
+  const filtered = cards.filter(c => !query || c.name.toLowerCase().includes(query.toLowerCase()));
 
   return (
     <div className="dm-commander-wrap">
-      <span className="dm-commander-label">Commander:</span>
-      {deck.commander_name
+      <span className="dm-commander-label">{label}</span>
+      {currentName
         ? <>
-            <span className="dm-commander-name">{deck.commander_name}</span>
-            <button className="dm-btn dm-btn-ghost dm-btn-xs" onClick={openPicker} title="Change commander">✎</button>
-            <button className="dm-btn dm-btn-danger dm-btn-xs" onClick={clear} title="Remove commander">✕</button>
+            <span className="dm-commander-name">{currentName}</span>
+            <button className="dm-btn dm-btn-ghost dm-btn-xs" onClick={openPicker} title={`Change ${label}`}>✎</button>
+            <button className="dm-btn dm-btn-danger dm-btn-xs" onClick={clear} title={`Remove ${label}`}>✕</button>
           </>
-        : <button className="dm-btn dm-btn-ghost dm-btn-xs" onClick={openPicker}>Set commander…</button>
+        : <button className="dm-btn dm-btn-ghost dm-btn-xs" onClick={openPicker}>Set {label.toLowerCase()}…</button>
       }
       {open && (
         <div className="dm-cmd-picker">
           <div className="dm-cmd-picker-header">
-            <span>Pick a Legendary from this deck</span>
+            <span>{emptyMsg ? 'Pick from this deck' : `Pick ${label}`}</span>
             <button className="dm-close" onClick={close}>✕</button>
           </div>
-          <input
-            className="dm-rename-input"
-            placeholder="Filter…"
-            value={query}
-            autoFocus
-            onChange={e => setQuery(e.target.value)}
-          />
+          <input className="dm-rename-input" placeholder="Filter…" value={query}
+            autoFocus onChange={e => setQuery(e.target.value)} />
           <div className="dm-cmd-list">
             {loading && <div className="dm-empty">Loading…</div>}
             {!loading && filtered.length === 0 && (
-              <div className="dm-empty">
-                {legendaries.length === 0
-                  ? 'No Legendary cards in this deck yet'
-                  : 'No matches'}
-              </div>
+              <div className="dm-empty">{emptyMsg || 'No matches'}</div>
             )}
             {filtered.map(c => (
               <div key={c.ids[0]} className="dm-cmd-item" onClick={() => pick(c)}>
@@ -131,6 +114,31 @@ function CommanderPicker({ deck, onSave }) {
         </div>
       )}
     </div>
+  );
+}
+
+function CommanderPicker({ deck, onSave }) {
+  return (
+    <CmdPicker
+      deck={deck} label="Commander:" currentName={deck.commander_name}
+      field="commander_id"
+      filterFn={c => c.type_line?.includes('Legendary')}
+      emptyMsg="No Legendary cards in this deck yet"
+      onSave={onSave}
+    />
+  );
+}
+
+function PartnerPicker({ deck, onSave }) {
+  if (!deck.commander_name) return null;
+  return (
+    <CmdPicker
+      deck={deck} label="Partner:" currentName={deck.partner_name}
+      field="partner_id"
+      filterFn={c => c.type_line?.includes('Legendary') && c.name !== deck.commander_name}
+      emptyMsg="No other Legendary cards in this deck"
+      onSave={onSave}
+    />
   );
 }
 
@@ -156,12 +164,15 @@ function DeckRow({ deck, onSave, onDelete }) {
   const commitEdit = () => {
     const trimmed = nameVal.trim();
     if (!trimmed) return;
-    onSave(deck.id, {
+    const payload = {
       name:        trimmed,
-      colors:      colorsVal,
-      format:      formatVal || null,
       description: descVal.trim() || null,
-    });
+    };
+    // Only send format if not already set (format is locked once chosen)
+    if (!deck.format) payload.format = formatVal || null;
+    // Only send colors for non-commander decks (commander colors auto-derive from commander/partner)
+    if (deck.format !== 'commander') payload.colors = colorsVal;
+    onSave(deck.id, payload);
     setEditing(false);
   };
 
@@ -185,15 +196,19 @@ function DeckRow({ deck, onSave, onDelete }) {
             onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit(); }}
             placeholder="Deck name"
           />
-          <select
-            className="dm-format-select"
-            value={formatVal}
-            onChange={e => setFormatVal(e.target.value)}
-          >
-            <option value="">— Format —</option>
-            {FORMATS.map(f => <option key={f} value={f}>{f.charAt(0).toUpperCase() + f.slice(1)}</option>)}
-          </select>
-          <ColorPicker value={colorsVal} onChange={setColorsVal} />
+          {deck.format
+            ? <span className="dm-format-locked">🔒 {deck.format.charAt(0).toUpperCase() + deck.format.slice(1)}</span>
+            : (
+              <select className="dm-format-select" value={formatVal} onChange={e => setFormatVal(e.target.value)}>
+                <option value="">— Format —</option>
+                {FORMATS.map(f => <option key={f} value={f}>{f.charAt(0).toUpperCase() + f.slice(1)}</option>)}
+              </select>
+            )
+          }
+          {deck.format === 'commander'
+            ? <span className="dm-colors-auto-note">Colors derive from commander(s)</span>
+            : <ColorPicker value={colorsVal} onChange={setColorsVal} />
+          }
           <textarea
             className="dm-desc-input"
             placeholder="Description (optional)"
@@ -222,7 +237,10 @@ function DeckRow({ deck, onSave, onDelete }) {
           {deck.description && <span className="dm-deck-desc">{deck.description}</span>}
         </div>
         {deck.format === 'commander' && (
-          <CommanderPicker deck={deck} onSave={onSave} />
+          <>
+            <CommanderPicker deck={deck} onSave={onSave} />
+            <PartnerPicker deck={deck} onSave={onSave} />
+          </>
         )}
       </div>
       <div className="dm-deck-right">
@@ -314,7 +332,11 @@ export function DeckManager({ onDecksChanged }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(fields),
       });
-      if (!res.ok) { showToast('Save failed'); return; }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Save failed');
+        return;
+      }
       await loadDecks();
       onDecksChanged?.();
       showToast(fields.name ? `Saved "${fields.name}"` : 'Saved');
@@ -581,6 +603,14 @@ export function DeckManager({ onDecksChanged }) {
         .dm-commander-wrap {
           display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
           margin-top: 4px; font-size: 11px;
+        }
+        .dm-format-locked {
+          font-size: 12px; color: #7ab0e0; font-weight: 600;
+          background: #1e2a3a; border: 1px solid #2a4060;
+          padding: 4px 10px; border-radius: 6px; letter-spacing: 0.04em;
+        }
+        .dm-colors-auto-note {
+          font-size: 11px; color: #666; font-style: italic;
         }
         .dm-commander-label { color: #666; flex-shrink: 0; }
         .dm-commander-name { color: #c8b06a; font-style: italic; }

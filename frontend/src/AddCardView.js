@@ -21,6 +21,31 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
 
   const debounce = useRef(null);
 
+  // Detect "SET #NUM" or "SET NUM" pattern, e.g. "MH3 42" or "ONE #115"
+  const parseSetNum = (q) => {
+    const m = q.trim().match(/^([a-zA-Z0-9]{2,6})\s+#?(\d+[a-zA-Z]?)$/);
+    return m ? { set: m[1], num: m[2] } : null;
+  };
+
+  // ── Direct set+number lookup ───────────────────────────────────────────────
+  const searchBySetNum = async (set, num) => {
+    setLoadingSearch(true);
+    setResults([]);
+    try {
+      const res = await fetch(`${API}/scryfall/card/${encodeURIComponent(set)}/${encodeURIComponent(num)}`);
+      if (res.ok) {
+        const card = await res.json();
+        // Go straight to the add form with this exact printing selected
+        setSelectedName(card.name);
+        setPrintings([card]);
+        selectCard(card);
+      } else {
+        showToast(`No card found for ${set.toUpperCase()} #${num}`, 'error');
+      }
+    } catch { showToast('Set/number lookup failed', 'error'); }
+    setLoadingSearch(false);
+  };
+
   // ── Step 1: search by name (deduplicated) ──────────────────────────────────
   const searchByName = async (q) => {
     if (q.length < 2) { setResults([]); return; }
@@ -40,7 +65,12 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
     setSelectedCard(null);
     setPrintings([]);
     clearTimeout(debounce.current);
-    debounce.current = setTimeout(() => searchByName(v), 400);
+    const parsed = parseSetNum(v);
+    if (parsed) {
+      debounce.current = setTimeout(() => searchBySetNum(parsed.set, parsed.num), 400);
+    } else {
+      debounce.current = setTimeout(() => searchByName(v), 400);
+    }
   };
 
   // Auto-enable foil for foil-only printings
@@ -145,7 +175,7 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
         <div className="search-block">
           <input
             className="search-input"
-            placeholder="Type a card name…"
+            placeholder="Card name  or  SET #number (e.g. MH3 42)"
             value={query}
             onChange={handleQueryChange}
             autoFocus

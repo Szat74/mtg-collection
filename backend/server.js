@@ -84,9 +84,11 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_coll_groups   ON collection_groups (group_id);
 `);
 
-// Migrate: add color_identity column if it doesn't exist yet
+// Migrations
 try { db.exec('ALTER TABLE card_cache ADD COLUMN color_identity TEXT'); } catch {}
 try { db.exec('ALTER TABLE card_cache ADD COLUMN full_art INTEGER DEFAULT 0'); } catch {}
+try { db.exec('ALTER TABLE card_cache ADD COLUMN keywords TEXT'); } catch {}
+try { db.exec('ALTER TABLE decks ADD COLUMN partner_id INTEGER REFERENCES collection(id) ON DELETE SET NULL'); } catch {}
 
 // ─── Fetch helper ─────────────────────────────────────────────────────────────
 async function scryFetch(url, options = {}) {
@@ -123,11 +125,11 @@ async function refreshBulkCache() {
     const upsert = db.prepare(`
       INSERT INTO card_cache
         (scryfall_id, name, set_code, set_name, collector_number, image_uri, image_back,
-         mana_cost, type_line, oracle_text, colors, color_identity, full_art, rarity,
+         mana_cost, type_line, oracle_text, colors, color_identity, full_art, keywords, rarity,
          prices_usd, prices_usd_foil, prices_usd_etched, foil_only, cached_at)
       VALUES
         (@scryfall_id, @name, @set_code, @set_name, @collector_number, @image_uri, @image_back,
-         @mana_cost, @type_line, @oracle_text, @colors, @color_identity, @full_art, @rarity,
+         @mana_cost, @type_line, @oracle_text, @colors, @color_identity, @full_art, @keywords, @rarity,
          @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, datetime('now'))
       ON CONFLICT(scryfall_id) DO UPDATE SET
         name=excluded.name, set_code=excluded.set_code, set_name=excluded.set_name,
@@ -136,7 +138,7 @@ async function refreshBulkCache() {
         mana_cost=excluded.mana_cost, type_line=excluded.type_line,
         oracle_text=excluded.oracle_text, colors=excluded.colors,
         color_identity=excluded.color_identity, full_art=excluded.full_art,
-        rarity=excluded.rarity,
+        keywords=excluded.keywords, rarity=excluded.rarity,
         prices_usd=excluded.prices_usd, prices_usd_foil=excluded.prices_usd_foil,
         prices_usd_etched=excluded.prices_usd_etched, foil_only=excluded.foil_only,
         cached_at=excluded.cached_at
@@ -188,6 +190,7 @@ function cardToRow(c) {
     colors:           c.colors          ? JSON.stringify(c.colors)          : null,
     color_identity:   c.color_identity  ? JSON.stringify(c.color_identity)  : null,
     full_art:         c.full_art        ? 1 : 0,
+    keywords:         c.keywords?.length ? JSON.stringify(c.keywords)       : null,
     rarity:           c.rarity       ?? null,
     ...parsePrices(c.prices),
     foil_only: (c.foil === true && c.nonfoil === false) ? 1 : 0,
@@ -268,6 +271,7 @@ function mergeCache(collRow) {
     colors:           cache?.colors          ?? null,
     color_identity:   cache?.color_identity  ?? null,
     full_art:         cache?.full_art        ?? 0,
+    keywords:         cache?.keywords        ?? null,
     rarity:           cache?.rarity          ?? null,
     prices_usd:       cache?.prices_usd       ?? null,
     prices_usd_foil:  cache?.prices_usd_foil  ?? null,
@@ -466,23 +470,19 @@ app.post('/api/cards', (req, res) => {
     }
   }
 
-  // Enforce commander color identity
+  // Enforce commander color identity (union of commander + partner)
   if (deck_id) {
-    const deck = db.prepare('SELECT format, commander_id FROM decks WHERE id = ?').get(deck_id);
+    const deck = db.prepare('SELECT format, commander_id, partner_id FROM decks WHERE id = ?').get(deck_id);
     if (deck?.format === 'commander' && deck.commander_id) {
-      const cmdRow = db.prepare(`
-        SELECT cc.color_identity FROM collection c
-        LEFT JOIN card_cache cc ON cc.scryfall_id = c.scryfall_id
-        WHERE c.id = ?
-      `).get(deck.commander_id);
-      const commanderIdentity = cmdRow?.color_identity ? JSON.parse(cmdRow.color_identity) : null;
-      // Only enforce if we have commander identity data
-      if (commanderIdentity !== null) {
+      const cmdInfo     = getCommanderInfo(deck.commander_id);
+      const partnerInfo = getCommanderInfo(deck.partner_id);
+      const deckIdentity = [...new Set([...cmdInfo.colors, ...partnerInfo.colors])];
+      if (deckIdentity.length > 0) {
         const cardIdentity = scryfall_card.color_identity || [];
-        const invalid = cardIdentity.filter(c => !commanderIdentity.includes(c));
+        const invalid = cardIdentity.filter(c => !deckIdentity.includes(c));
         if (invalid.length > 0) {
           return res.status(400).json({
-            error: `"${scryfall_card.name}" has color identity [${cardIdentity.join(',')}] which is outside the commander's identity [${commanderIdentity.join(',')}]`,
+            error: `"${scryfall_card.name}" has color identity [${cardIdentity.join(',')}] which is outside the commander's identity [${deckIdentity.join(',')}]`,
           });
         }
       }
@@ -551,25 +551,22 @@ app.patch('/api/cards/:id', (req, res) => {
 
   // Enforce commander color identity when moving a card into a commander deck
   if (deck_id != null) {
-    const deck = db.prepare('SELECT format, commander_id FROM decks WHERE id = ?').get(deck_id);
+    const deck = db.prepare('SELECT format, commander_id, partner_id FROM decks WHERE id = ?').get(deck_id);
     if (deck?.format === 'commander' && deck.commander_id) {
       const cardRow = db.prepare(`
         SELECT cc.color_identity FROM collection c
         LEFT JOIN card_cache cc ON cc.scryfall_id = c.scryfall_id
         WHERE c.id = ?
       `).get(id);
-      const cmdRow = db.prepare(`
-        SELECT cc.color_identity FROM collection c
-        LEFT JOIN card_cache cc ON cc.scryfall_id = c.scryfall_id
-        WHERE c.id = ?
-      `).get(deck.commander_id);
-      const commanderIdentity = cmdRow?.color_identity ? JSON.parse(cmdRow.color_identity) : null;
-      if (commanderIdentity !== null) {
+      const cmdInfo     = getCommanderInfo(deck.commander_id);
+      const partnerInfo = getCommanderInfo(deck.partner_id);
+      const deckIdentity = [...new Set([...cmdInfo.colors, ...partnerInfo.colors])];
+      if (deckIdentity.length > 0) {
         const cardIdentity = cardRow?.color_identity ? JSON.parse(cardRow.color_identity) : [];
-        const invalid = cardIdentity.filter(c => !commanderIdentity.includes(c));
+        const invalid = cardIdentity.filter(c => !deckIdentity.includes(c));
         if (invalid.length > 0) {
           return res.status(400).json({
-            error: `Card color identity [${cardIdentity.join(',')}] is outside the commander's identity [${commanderIdentity.join(',')}]`,
+            error: `Card color identity [${cardIdentity.join(',')}] is outside the commander's identity [${deckIdentity.join(',')}]`,
           });
         }
       }
@@ -643,6 +640,23 @@ app.get('/api/stats', (req, res) => {
 });
 
 // ── Decks ─────────────────────────────────────────────────────────────────────
+// Helper: fetch commander/partner info by collection id
+function getCommanderInfo(collectionId) {
+  if (!collectionId) return { name: null, colors: [], oracle_text: null, type_line: null };
+  const row = db.prepare(`
+    SELECT c.name, cc.color_identity, cc.oracle_text, cc.type_line
+    FROM collection c
+    LEFT JOIN card_cache cc ON cc.scryfall_id = c.scryfall_id
+    WHERE c.id = ?
+  `).get(collectionId);
+  return {
+    name:        row?.name        ?? null,
+    colors:      row?.color_identity ? JSON.parse(row.color_identity) : [],
+    oracle_text: row?.oracle_text ?? null,
+    type_line:   row?.type_line   ?? null,
+  };
+}
+
 app.get('/api/decks', (req, res) => {
   const rows = db.prepare('SELECT * FROM decks ORDER BY name').all();
 
@@ -651,27 +665,26 @@ app.get('/api/decks', (req, res) => {
       'SELECT COUNT(*) AS cardCount FROM collection WHERE deck_id = ?'
     ).get(deck.id);
 
-    let commander_name   = null;
-    let commander_colors = null;
-    if (deck.commander_id) {
-      const cmd = db.prepare(`
-        SELECT c.name, cc.colors FROM collection c
-        LEFT JOIN card_cache cc ON cc.scryfall_id = c.scryfall_id
-        WHERE c.id = ?
-      `).get(deck.commander_id);
-      commander_name   = cmd?.name ?? null;
-      commander_colors = cmd?.colors ? JSON.parse(cmd.colors) : [];
-    }
+    const cmd     = getCommanderInfo(deck.commander_id);
+    const partner = getCommanderInfo(deck.partner_id);
+
+    // Derive colors: union of commander + partner color identities
+    const derivedColors = deck.format === 'commander' && (deck.commander_id || deck.partner_id)
+      ? [...new Set([...cmd.colors, ...partner.colors])]
+      : (deck.colors ? JSON.parse(deck.colors) : []);
 
     return {
       id:               deck.id,
       name:             deck.name,
-      colors:           deck.colors ? JSON.parse(deck.colors) : [],
+      colors:           derivedColors,
       description:      deck.description,
       format:           deck.format,
       commander_id:     deck.commander_id,
-      commander_name,
-      commander_colors,
+      commander_name:   cmd.name,
+      commander_colors: cmd.colors,
+      partner_id:       deck.partner_id ?? null,
+      partner_name:     partner.name,
+      partner_colors:   partner.colors,
       created_at:       deck.created_at,
       cardCount,
     };
@@ -699,22 +712,48 @@ app.post('/api/decks', (req, res) => {
   }
 });
 
+// Detect partner type from oracle_text
+function detectPartnerType(oracleText) {
+  if (!oracleText) return null;
+  const t = oracleText.toLowerCase();
+  if (t.includes("doctor's companion")) return 'doctors_companion';
+  if (t.includes('friends forever'))    return 'friends_forever';
+  if (/partner with /i.test(oracleText)) return 'partner_with';
+  if (/\bpartner\b/i.test(oracleText))  return 'partner';
+  return null;
+}
+
+// Extract the named partner from "Partner with [Name]" oracle text
+function extractPartnerWithName(oracleText) {
+  const m = (oracleText || '').match(/Partner with ([^\(]+)/i);
+  return m ? m[1].trim() : null;
+}
+
 app.patch('/api/decks/:id', (req, res) => {
   const deckId = parseInt(req.params.id, 10);
-  const { name, colors, description, format, commander_id } = req.body;
+  const { name, colors, description, format, commander_id, partner_id } = req.body;
   const updates = [], params = [];
+
+  const deck = db.prepare('SELECT * FROM decks WHERE id = ?').get(deckId);
+  if (!deck) return res.status(404).json({ error: 'Deck not found' });
+
+  // Format lock: once set, format cannot be changed
+  if (format !== undefined && deck.format !== null && deck.format !== format) {
+    return res.status(400).json({ error: 'Format cannot be changed once set. Delete and recreate the deck to change format.' });
+  }
 
   if (name        !== undefined) { updates.push('name = ?');         params.push(name.trim()); }
   if (colors      !== undefined) { updates.push('colors = ?');       params.push(colors ? JSON.stringify(colors) : null); }
   if (description !== undefined) { updates.push('description = ?');  params.push(description ?? null); }
   if (format      !== undefined) { updates.push('format = ?');       params.push(format ?? null); }
+
+  const deckFormat = format ?? deck.format;
+
   if (commander_id !== undefined) {
     if (commander_id != null) {
-      const deck = db.prepare('SELECT format FROM decks WHERE id = ?').get(deckId);
-      const deckFormat = format ?? deck?.format;
       if (deckFormat === 'commander') {
         const card = db.prepare(`
-          SELECT cc.type_line, cc.color_identity FROM collection c
+          SELECT cc.type_line, cc.color_identity, cc.oracle_text FROM collection c
           LEFT JOIN card_cache cc ON cc.scryfall_id = c.scryfall_id
           WHERE c.id = ?
         `).get(commander_id);
@@ -722,18 +761,51 @@ app.patch('/api/decks/:id', (req, res) => {
         if (!card.type_line?.includes('Legendary')) {
           return res.status(400).json({ error: 'Commander must be a Legendary card' });
         }
-        // Auto-set deck colors to commander's color identity (only when colors not explicitly provided)
-        if (colors === undefined && card.color_identity) {
-          const identity = JSON.parse(card.color_identity);
+        // Auto-derive colors from commander + existing partner
+        if (colors === undefined) {
+          const cmdCI      = card.color_identity ? JSON.parse(card.color_identity) : [];
+          const existingPartnerId = partner_id !== undefined ? partner_id : deck.partner_id;
+          const partnerInfo = getCommanderInfo(existingPartnerId);
+          const combined   = [...new Set([...cmdCI, ...partnerInfo.colors])];
           updates.push('colors = ?');
-          params.push(identity.length ? JSON.stringify(identity) : null);
+          params.push(combined.length ? JSON.stringify(combined) : null);
         }
       }
-    } else {
-      // Clearing the commander — do not auto-clear colors
     }
     updates.push('commander_id = ?');
     params.push(commander_id ?? null);
+  }
+
+  if (partner_id !== undefined) {
+    if (partner_id != null) {
+      if (deckFormat !== 'commander') {
+        return res.status(400).json({ error: 'Partners are only supported for Commander format decks' });
+      }
+      const existingCmdId = commander_id !== undefined ? commander_id : deck.commander_id;
+      if (!existingCmdId) {
+        return res.status(400).json({ error: 'Set a commander before assigning a partner' });
+      }
+      const partnerCard = db.prepare(`
+        SELECT cc.type_line, cc.color_identity, c.name FROM collection c
+        LEFT JOIN card_cache cc ON cc.scryfall_id = c.scryfall_id
+        WHERE c.id = ?
+      `).get(partner_id);
+      if (!partnerCard) return res.status(404).json({ error: 'Partner card not found in collection' });
+      if (!partnerCard.type_line?.includes('Legendary')) {
+        return res.status(400).json({ error: 'Partner must be a Legendary card' });
+      }
+
+      // Auto-derive colors from commander + partner
+      if (colors === undefined) {
+        const cmdInfo   = getCommanderInfo(existingCmdId);
+        const partnerCI = partnerCard.color_identity ? JSON.parse(partnerCard.color_identity) : [];
+        const combined  = [...new Set([...cmdInfo.colors, ...partnerCI])];
+        updates.push('colors = ?');
+        params.push(combined.length ? JSON.stringify(combined) : null);
+      }
+    }
+    updates.push('partner_id = ?');
+    params.push(partner_id ?? null);
   }
 
   if (!updates.length) return res.status(400).json({ error: 'No fields to update' });
@@ -741,12 +813,8 @@ app.patch('/api/decks/:id', (req, res) => {
   try {
     params.push(deckId);
     db.prepare(`UPDATE decks SET ${updates.join(', ')} WHERE id = ?`).run(...params);
-    const deck = db.prepare('SELECT * FROM decks WHERE id = ?').get(deckId);
-    if (!deck) return res.status(404).json({ error: 'Deck not found' });
-    res.json({
-      ...deck,
-      colors: deck.colors ? JSON.parse(deck.colors) : [],
-    });
+    const updated = db.prepare('SELECT * FROM decks WHERE id = ?').get(deckId);
+    res.json({ ...updated, colors: updated.colors ? JSON.parse(updated.colors) : [] });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -759,6 +827,79 @@ app.delete('/api/decks/:id', (req, res) => {
     db.prepare('DELETE FROM decks WHERE id = ?').run(deckId);
   })();
   res.json({ ok: true });
+});
+
+// ── Deck cards with violations ────────────────────────────────────────────────
+const SIZE_LIMITS = { commander: 100, standard: 60, pioneer: 60, modern: 60, legacy: 60, vintage: 60, pauper: 60 };
+
+app.get('/api/decks/:id/cards', (req, res) => {
+  const deckId = parseInt(req.params.id, 10);
+  const deck   = db.prepare('SELECT * FROM decks WHERE id = ?').get(deckId);
+  if (!deck) return res.status(404).json({ error: 'Deck not found' });
+
+  const format   = deck.format;
+  const deckColors = (() => {
+    const cmd     = getCommanderInfo(deck.commander_id);
+    const partner = getCommanderInfo(deck.partner_id);
+    return format === 'commander' ? [...new Set([...cmd.colors, ...partner.colors])] : [];
+  })();
+
+  const rows  = db.prepare(`
+    SELECT c.id, c.scryfall_id, c.name, c.deck_id, c.foil, c.added_at
+    FROM collection c
+    WHERE c.deck_id = ?
+    ORDER BY c.name
+  `).all(deckId).map(row => attachRelations(mergeCache(row)));
+
+  const grouped = groupRows(rows);
+
+  // Build name → count map (for singleton / copy-limit checks)
+  const nameCounts = {};
+  for (const card of grouped) {
+    const key = card.name.toLowerCase();
+    nameCounts[key] = (nameCounts[key] || 0) + card.quantity;
+  }
+
+  const isBasic = (card) => card.type_line?.startsWith('Basic Land');
+
+  const withViolations = grouped.map(card => {
+    const violations = [];
+    const nameKey = card.name.toLowerCase();
+
+    if (format === 'commander') {
+      if (!isBasic(card) && nameCounts[nameKey] > 1) {
+        violations.push({ type: 'singleton', message: 'More than 1 copy (Commander singleton rule)' });
+      }
+      if (deckColors.length > 0 && !isBasic(card)) {
+        const ci = card.color_identity ? JSON.parse(card.color_identity) : [];
+        if (!ci.every(c => deckColors.includes(c))) {
+          violations.push({ type: 'color_identity', message: 'Outside commander color identity' });
+        }
+      }
+    } else if (format === 'pauper') {
+      if (!isBasic(card) && nameCounts[nameKey] > 4) {
+        violations.push({ type: 'copy_limit', message: 'More than 4 copies' });
+      }
+      if (card.rarity && card.rarity !== 'common') {
+        violations.push({ type: 'rarity', message: `Not a common (${card.rarity})` });
+      }
+    } else if (['standard', 'pioneer', 'modern', 'legacy', 'vintage'].includes(format)) {
+      if (!isBasic(card) && nameCounts[nameKey] > 4) {
+        violations.push({ type: 'copy_limit', message: 'More than 4 copies' });
+      }
+    }
+
+    return { ...card, violations };
+  });
+
+  const totalCards    = grouped.reduce((s, c) => s + c.quantity, 0);
+  const violationCount = withViolations.reduce((s, c) => s + c.violations.length, 0);
+  const sizeLimit      = SIZE_LIMITS[format] ?? null;
+
+  res.json({
+    summary: { total: totalCards, sizeLimit, violations: violationCount },
+    cards:   withViolations,
+  });
 });
 
 // ── Groups ────────────────────────────────────────────────────────────────────

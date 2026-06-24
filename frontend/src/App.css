@@ -645,14 +645,43 @@ a { color: var(--gold); }
 
 .land-name-group { display: flex; flex-direction: column; gap: 4px; }
 .land-name-heading {
+  display: flex; align-items: center; gap: 6px;
   font-size: 12px; font-weight: 700; color: var(--text);
-  letter-spacing: 0.04em; padding: 4px 0 2px;
+  letter-spacing: 0.04em; padding: 4px 6px 4px 4px;
   border-bottom: 1px solid var(--border); margin-bottom: 2px;
+  cursor: pointer; user-select: none; border-radius: 4px;
 }
+.land-name-heading:hover { background: var(--bg3); }
+.land-name-toggle { font-size: 10px; color: var(--text-dim); flex-shrink: 0; }
+.land-name-label { flex: 1; }
+.land-name-total { font-size: 11px; color: var(--text-dim); font-weight: 400; text-transform: none; }
+.land-gallery-btn { font-size: 10px; padding: 2px 6px; flex-shrink: 0; text-transform: none; letter-spacing: 0; }
+
 .land-art-group { display: flex; flex-direction: column; gap: 3px; padding-left: 8px; }
 .land-art-label {
   font-size: 10px; color: var(--text-dim); font-style: italic;
   padding: 2px 0; letter-spacing: 0.03em;
+}
+
+.land-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px; padding: 8px 0;
+}
+.land-gallery-tile {
+  display: flex; flex-direction: column;
+  border-radius: var(--radius); overflow: hidden;
+  border: 1px solid var(--border); background: var(--bg2);
+}
+.land-gallery-tile img { width: 100%; aspect-ratio: 63 / 88; object-fit: cover; display: block; }
+.land-gallery-placeholder {
+  width: 100%; aspect-ratio: 63 / 88;
+  background: var(--bg3); display: flex; align-items: center; justify-content: center;
+  font-size: 11px; color: var(--text-dim);
+}
+.land-gallery-info {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 8px 6px; font-size: 11px;
 }
 
 .land-row { display: flex; flex-direction: column; gap: 0; }
@@ -662,13 +691,30 @@ a { color: var(--gold); }
   transition: background 0.12s;
 }
 .land-row-main:hover { background: var(--bg3); }
+.land-thumb-wrap { position: relative; flex-shrink: 0; }
 .land-thumb {
   width: 36px; height: 50px; object-fit: cover;
-  border-radius: 4px; flex-shrink: 0;
+  border-radius: 4px; display: block;
   border: 1px solid var(--border);
 }
-.land-thumb-empty {
-  background: var(--bg3); display: inline-block;
+.land-thumb-empty { background: var(--bg3); display: block; width: 36px; height: 50px; border-radius: 4px; }
+.land-foil-badge {
+  position: absolute; bottom: 1px; right: 2px;
+  font-size: 8px; color: var(--gold); line-height: 1;
+}
+.land-foil-label {
+  font-size: 10px; color: var(--gold); font-weight: 600; flex-shrink: 0;
+}
+.land-price {
+  font-size: 11px; color: var(--text-dim); flex-shrink: 0;
+}
+.land-gallery-img-wrap { position: relative; }
+.land-gallery-img-wrap .foil-badge {
+  position: absolute; bottom: 6px; left: 6px;
+  font-size: 10px; background: rgba(0,0,0,.55); padding: 2px 5px; border-radius: 4px;
+}
+.land-gallery-img-wrap .price-overlay {
+  position: absolute; bottom: 6px; right: 6px;
 }
 .land-set-badge {
   font-size: 11px; color: var(--text-dim); font-family: monospace;
@@ -682,12 +728,128 @@ a { color: var(--gold); }
   font-size: 11px; color: var(--text-dim); flex: 1;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.land-actions { display: flex; gap: 5px; flex-shrink: 0; }
+.land-deck-rows {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 4px 8px 6px 52px; /* indent past thumbnail */
+}
+.land-deck-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 2px 0;
+}
+.land-deck-name {
+  font-size: 12px; color: var(--text); flex: 1;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.land-deck-count {
+  font-size: 13px; font-weight: 700; color: var(--text);
+  min-width: 22px; text-align: center;
+}
+.land-deck-unassigned .land-deck-name { color: var(--text-dim); font-style: italic; }
+.land-deck-unassigned .land-deck-count { color: var(--text-dim); }
+.land-deck-assign-select {
+  font-size: 11px; padding: 1px 4px; border-radius: 4px;
+  background: var(--bg3); border: 1px solid var(--border); color: var(--text);
+  max-width: 160px;
+}
 
-.land-row-edit {
-  padding: 8px 8px 4px 52px; /* indent past thumbnail */
-  display: flex; flex-direction: column; gap: 4px;
-  border-left: 2px solid var(--border); margin-left: 20px; margin-top: 2px;
+/* ── Deck View ───────────────────────────────────────────────────────────────── */
+.dv-root {
+  display: flex; height: calc(100vh - 56px); overflow: hidden;
+}
+.dv-sidebar {
+  width: 260px; flex-shrink: 0; display: flex; flex-direction: column;
+  border-right: 1px solid var(--border); background: var(--bg2);
+  overflow: hidden;
+}
+.dv-sidebar-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px 10px; border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.dv-sidebar-title {
+  font-size: 13px; font-weight: 700; color: var(--gold);
+  letter-spacing: 0.06em; text-transform: uppercase;
+}
+.dv-deck-list { flex: 1; overflow-y: auto; padding: 6px; }
+.dv-deck-item {
+  padding: 9px 10px; border-radius: var(--radius); cursor: pointer;
+  border: 1px solid transparent; margin-bottom: 3px;
+  transition: background 0.12s, border-color 0.12s;
+}
+.dv-deck-item:hover { background: var(--bg3); border-color: var(--border); }
+.dv-deck-item.selected { background: var(--bg3); border-color: var(--accent); }
+.dv-deck-item-main { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.dv-deck-item-name { font-size: 13px; font-weight: 500; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dv-deck-item-format { font-size: 9px; color: var(--text-dim); white-space: nowrap; }
+.dv-deck-item-sub { display: flex; align-items: center; justify-content: space-between; }
+.dv-deck-item-count { font-size: 10px; color: var(--text-dim); }
+
+.dv-detail {
+  flex: 1; overflow-y: auto; display: flex; flex-direction: column;
+  padding: 20px 24px; gap: 16px;
+}
+.dv-empty-detail {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  color: var(--text-dim); font-style: italic; font-size: 14px;
+}
+.dv-loading { color: var(--text-dim); font-style: italic; padding: 20px; }
+.dv-empty { color: var(--text-dim); font-style: italic; font-size: 12px; padding: 16px 8px; text-align: center; }
+
+.dv-detail-header { display: flex; flex-direction: column; gap: 10px; flex-shrink: 0; }
+.dv-detail-title-row {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.dv-detail-name {
+  margin: 0; font-size: 20px; font-weight: 700; color: var(--text);
+  font-family: var(--font-display);
+}
+.dv-detail-format {
+  font-size: 11px; font-weight: 600; color: #7ab0e0;
+  background: rgba(122,176,224,0.12); border: 1px solid rgba(122,176,224,0.3);
+  padding: 2px 8px; border-radius: 10px; white-space: nowrap;
+}
+.dv-detail-count { font-size: 13px; margin-left: auto; }
+
+.dv-commanders { display: flex; align-items: center; gap: 12px; }
+.dv-cmd-thumb { display: flex; align-items: center; gap: 8px; }
+.dv-cmd-thumb img { width: 40px; height: 56px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border); }
+.dv-cmd-name { font-size: 13px; color: var(--gold); font-style: italic; }
+.dv-cmd-plus { font-size: 18px; color: var(--text-dim); }
+
+.dv-violations-banner {
+  background: rgba(201,64,64,0.08); border: 1px solid rgba(201,64,64,0.4);
+  border-radius: var(--radius); padding: 10px 14px; flex-shrink: 0;
+}
+.dv-violations-header {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 12px; color: #e07070; cursor: pointer; user-select: none;
+}
+.dv-violations-toggle { font-size: 10px; color: var(--text-dim); }
+.dv-violations-list {
+  margin: 8px 0 0; padding-left: 16px;
+  font-size: 11px; color: var(--text-dim); display: flex; flex-direction: column; gap: 3px;
+}
+.dv-violations-list li { list-style: disc; }
+
+.dv-card-grid { flex: 1; align-content: start; }
+
+/* Violation overlay on card tiles in DeckView */
+.dv-card-tile { position: relative; }
+.card-tile.has-violation { border-color: var(--danger) !important; }
+.dv-violation-badges {
+  position: absolute; top: 4px; right: 4px; z-index: 5;
+  display: flex; flex-direction: column; gap: 2px; align-items: flex-end;
+}
+.dv-violation-badge {
+  background: var(--danger); color: #fff;
+  font-size: 8px; font-weight: 700; letter-spacing: 0.04em;
+  padding: 2px 5px; border-radius: 4px; white-space: nowrap;
+  text-transform: uppercase;
+}
+.dv-qty-badge {
+  position: absolute; bottom: 6px; left: 6px;
+  background: rgba(0,0,0,0.65); color: #fff;
+  font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
 }
 
 /* ── Settings View ──────────────────────────────────────────────────────────── */

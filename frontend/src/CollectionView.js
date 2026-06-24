@@ -9,25 +9,9 @@ const COLOR_NAMES = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green' };
 const LAND_ORDER = ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest', 'Snow-Covered Plains', 'Snow-Covered Island', 'Snow-Covered Swamp', 'Snow-Covered Mountain', 'Snow-Covered Forest'];
 
 function LandRow({ land, decks, onUpdate, onDelete }) {
-  const [editing, setEditing] = useState(false);
-  const [copies, setCopies]   = useState(land.copies || []);
+  const [copies, setCopies] = useState(land.copies || []);
 
   useEffect(() => { setCopies(land.copies || []); }, [land]);
-
-  const setCopyDeck = (id, deckId) =>
-    setCopies(prev => prev.map(c => c.id === id ? { ...c, deck_id: deckId } : c));
-
-  const save = async () => {
-    const updated = await Promise.all(copies.map(copy =>
-      fetch(`${API}/cards/${copy.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ deck_id: copy.deck_id ?? null }),
-      }).then(r => r.json())
-    ));
-    onUpdate(updated);
-    setEditing(false);
-  };
 
   const delAll = async () => {
     if (!window.confirm(`Remove all ${land.quantity} cop${land.quantity === 1 ? 'y' : 'ies'} of ${land.name} (${land.set_code?.toUpperCase()})?`)) return;
@@ -35,60 +19,185 @@ function LandRow({ land, decks, onUpdate, onDelete }) {
     onDelete(land.ids);
   };
 
-  // Build deck summary: "4 in Elfball · 8 unassigned"
-  const deckCounts = {};
-  let unassigned = 0;
-  for (const copy of (land.copies || [])) {
-    if (copy.deck_id) {
-      const deck = decks.find(d => d.id === copy.deck_id);
-      const label = deck?.name ?? `#${copy.deck_id}`;
-      deckCounts[label] = (deckCounts[label] || 0) + 1;
-    } else {
-      unassigned++;
-    }
-  }
-  const summaryParts = Object.entries(deckCounts).map(([name, n]) => `${n} in ${name}`);
-  if (unassigned > 0) summaryParts.push(`${unassigned} unassigned`);
-  const summary = summaryParts.join(' · ');
+  // Assign one unassigned copy to a deck
+  const increment = async (deckId) => {
+    const copy = copies.find(c => !c.deck_id);
+    if (!copy) return;
+    const res = await fetch(`${API}/cards/${copy.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deck_id: deckId }),
+    });
+    const updated = await res.json();
+    const next = copies.map(c => c.id === copy.id ? { ...c, deck_id: deckId } : c);
+    setCopies(next);
+    onUpdate([updated]);
+  };
 
-  const cardColorIdentity = land.color_identity ? JSON.parse(land.color_identity) : [];
+  // Return one copy from a deck back to unassigned
+  const decrement = async (deckId) => {
+    const copy = copies.find(c => c.deck_id === deckId);
+    if (!copy) return;
+    const res = await fetch(`${API}/cards/${copy.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deck_id: null }),
+    });
+    const updated = await res.json();
+    const next = copies.map(c => c.id === copy.id ? { ...c, deck_id: null } : c);
+    setCopies(next);
+    onUpdate([updated]);
+  };
+
+  // Build per-deck counts
+  const deckCountMap = {};
+  let unassigned = 0;
+  for (const copy of copies) {
+    if (copy.deck_id) deckCountMap[copy.deck_id] = (deckCountMap[copy.deck_id] || 0) + 1;
+    else unassigned++;
+  }
+  const assignedDecks = decks.filter(d => deckCountMap[d.id]);
+
+  const isFoil = !!land.foil;
+  const rawPrice = isFoil
+    ? (land.prices_usd_foil ?? land.prices_usd_etched ?? land.prices_usd)
+    : (land.prices_usd ?? land.prices_usd_foil ?? land.prices_usd_etched);
+  const price = rawPrice != null ? `$${parseFloat(rawPrice).toFixed(2)}` : '—';
 
   return (
-    <div className="land-row">
+    <div className={`land-row${isFoil ? ' foil' : ''}`}>
       <div className="land-row-main">
-        {land.image_uri
-          ? <img className="land-thumb" src={land.image_uri} alt={land.name} loading="lazy" />
-          : <div className="land-thumb land-thumb-empty" />
-        }
+        <div className="land-thumb-wrap">
+          {land.image_uri
+            ? <img className="land-thumb" src={land.image_uri} alt={land.name} loading="lazy" />
+            : <div className="land-thumb land-thumb-empty" />
+          }
+          {isFoil && <span className="land-foil-badge">✦</span>}
+        </div>
         <span className="land-set-badge">
           {land.set_code?.toUpperCase()}{land.collector_number ? ` #${land.collector_number}` : ''}
         </span>
+        {isFoil && <span className="land-foil-label">Foil</span>}
+        <span className="land-price">{price}</span>
         <span className="land-qty">×{land.quantity}</span>
-        <span className="land-summary">{summary}</span>
-        <div className="land-actions">
-          <button className="btn-sm" onClick={() => setEditing(e => !e)}>
-            {editing ? 'Cancel' : 'Edit'}
-          </button>
-          <button className="btn-sm btn-danger" onClick={delAll} title="Remove all copies">✕</button>
-        </div>
+        <button className="btn-sm btn-danger" onClick={delAll} title="Remove all copies">✕</button>
       </div>
-      {editing && (
-        <div className="land-row-edit">
-          {copies.map((copy, i) => (
-            <CopyRow
-              key={copy.id}
-              copy={copy}
-              index={i}
-              decks={decks}
-              cardColorIdentity={cardColorIdentity}
-              onChange={setCopyDeck}
-            />
-          ))}
-          <div className="edit-btns">
-            <button className="btn-sm btn-save" onClick={save}>Save</button>
-            <button className="btn-sm" onClick={() => { setCopies(land.copies || []); setEditing(false); }}>Cancel</button>
+
+      {/* Per-deck assignment rows */}
+      <div className="land-deck-rows">
+        {assignedDecks.map(deck => (
+          <div key={deck.id} className="land-deck-row">
+            <span className="land-deck-name">{deck.name}</span>
+            <button
+              className="btn-qty"
+              onClick={() => decrement(deck.id)}
+              disabled={!deckCountMap[deck.id]}
+            >−</button>
+            <span className="land-deck-count">{deckCountMap[deck.id] || 0}</span>
+            <button
+              className="btn-qty"
+              onClick={() => increment(deck.id)}
+              disabled={unassigned === 0}
+              title={unassigned === 0 ? 'No unassigned copies' : undefined}
+            >+</button>
           </div>
-        </div>
+        ))}
+        {/* Unassigned row — only shown if there are any, or if no decks assigned yet */}
+        {(unassigned > 0 || assignedDecks.length === 0) && (
+          <div className="land-deck-row land-deck-unassigned">
+            <span className="land-deck-name">Unassigned</span>
+            <span className="land-deck-count">{unassigned}</span>
+            {decks.length > 0 && unassigned > 0 && (
+              <select
+                className="land-deck-assign-select"
+                defaultValue=""
+                onChange={e => { if (e.target.value) { increment(parseInt(e.target.value, 10)); e.target.value = ''; } }}
+              >
+                <option value="">+ assign to deck…</option>
+                {decks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LandNameGroup({ groupKey, displayName, regular, fullArt, decks, onUpdate, onDelete }) {
+  const [collapsed, setCollapsed] = useState(true);
+  const [galleryMode, setGalleryMode] = useState(false);
+
+  const total = [...regular, ...fullArt].reduce((s, l) => s + l.quantity, 0);
+  const hasFullArt = fullArt.length > 0;
+
+  return (
+    <div className="land-name-group">
+      <div className="land-name-heading" onClick={() => setCollapsed(c => !c)}>
+        <span className="land-name-toggle">{collapsed ? '▸' : '▾'}</span>
+        <span className="land-name-label">{displayName}</span>
+        <span className="land-name-total">×{total}</span>
+        {hasFullArt && !collapsed && (
+          <button
+            className={`btn-sm land-gallery-btn ${galleryMode ? 'btn-save' : ''}`}
+            onClick={e => { e.stopPropagation(); setGalleryMode(g => !g); }}
+            title="Toggle full-art gallery view"
+          >
+            {galleryMode ? '☰ List' : '⊞ Gallery'}
+          </button>
+        )}
+      </div>
+
+      {!collapsed && (
+        <>
+          {regular.length > 0 && (
+            <div className="land-art-group">
+              {hasFullArt && <div className="land-art-label">Regular</div>}
+              {regular.map(land => (
+                <LandRow key={land.ids[0]} land={land} decks={decks} onUpdate={onUpdate} onDelete={onDelete} />
+              ))}
+            </div>
+          )}
+
+          {hasFullArt && (
+            <div className="land-art-group">
+              <div className="land-art-label">Full Art</div>
+              {galleryMode ? (
+                <div className="land-gallery-grid">
+                  {fullArt.map(land => {
+                    const gFoil = !!land.foil;
+                    const gRawPrice = gFoil
+                      ? (land.prices_usd_foil ?? land.prices_usd_etched ?? land.prices_usd)
+                      : (land.prices_usd ?? land.prices_usd_foil ?? land.prices_usd_etched);
+                    const gPrice = gRawPrice != null ? `$${parseFloat(gRawPrice).toFixed(2)}` : '—';
+                    return (
+                      <div key={land.ids[0]} className={`land-gallery-tile${gFoil ? ' foil' : ''}`}>
+                        <div className="land-gallery-img-wrap">
+                          {land.image_uri
+                            ? <img src={land.image_uri} alt={land.name} loading="lazy" />
+                            : <div className="land-gallery-placeholder">{land.name}</div>
+                          }
+                          {gFoil && <span className="foil-badge">✦ Foil</span>}
+                          <span className="price-overlay">{gPrice}</span>
+                        </div>
+                        <div className="land-gallery-info">
+                          <span className="land-set-badge">
+                            {land.set_code?.toUpperCase()}{land.collector_number ? ` #${land.collector_number}` : ''}
+                          </span>
+                          <span className="land-qty">×{land.quantity}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                fullArt.map(land => (
+                  <LandRow key={land.ids[0]} land={land} decks={decks} onUpdate={onUpdate} onDelete={onDelete} />
+                ))
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -97,17 +206,24 @@ function LandRow({ land, decks, onUpdate, onDelete }) {
 function LandSection({ lands, decks, onUpdate, onDelete }) {
   const [collapsed, setCollapsed] = useState(false);
 
-  // Group by name, then by full_art
+  // Group by name (case-insensitive), then by full_art
   const byName = {};
+  const canonicalName = {}; // lowercased key → display name (prefer title-case)
   for (const land of lands) {
-    if (!byName[land.name]) byName[land.name] = { regular: [], fullArt: [] };
-    if (land.full_art) byName[land.name].fullArt.push(land);
-    else               byName[land.name].regular.push(land);
+    const key = land.name.toLowerCase();
+    if (!byName[key]) {
+      byName[key] = { regular: [], fullArt: [] };
+      canonicalName[key] = land.name;
+    }
+    // Prefer the title-case version as the display name
+    if (land.name[0] === land.name[0].toUpperCase()) canonicalName[key] = land.name;
+    if (land.full_art) byName[key].fullArt.push(land);
+    else               byName[key].regular.push(land);
   }
 
   const orderedNames = [
-    ...LAND_ORDER.filter(n => byName[n]),
-    ...Object.keys(byName).filter(n => !LAND_ORDER.includes(n)).sort(),
+    ...LAND_ORDER.map(n => n.toLowerCase()).filter(k => byName[k]),
+    ...Object.keys(byName).filter(k => !LAND_ORDER.map(n => n.toLowerCase()).includes(k)).sort(),
   ];
 
   const total = lands.reduce((s, l) => s + l.quantity, 0);
@@ -120,28 +236,17 @@ function LandSection({ lands, decks, onUpdate, onDelete }) {
       </div>
       {!collapsed && (
         <div className="land-section-body">
-          {orderedNames.map(name => (
-            <div key={name} className="land-name-group">
-              <div className="land-name-heading">{name}</div>
-              {byName[name].regular.length > 0 && (
-                <div className="land-art-group">
-                  {byName[name].fullArt.length > 0 && (
-                    <div className="land-art-label">Regular</div>
-                  )}
-                  {byName[name].regular.map(land => (
-                    <LandRow key={land.ids[0]} land={land} decks={decks} onUpdate={onUpdate} onDelete={onDelete} />
-                  ))}
-                </div>
-              )}
-              {byName[name].fullArt.length > 0 && (
-                <div className="land-art-group">
-                  <div className="land-art-label">Full Art</div>
-                  {byName[name].fullArt.map(land => (
-                    <LandRow key={land.ids[0]} land={land} decks={decks} onUpdate={onUpdate} onDelete={onDelete} />
-                  ))}
-                </div>
-              )}
-            </div>
+          {orderedNames.map(key => (
+            <LandNameGroup
+              key={key}
+              groupKey={key}
+              displayName={canonicalName[key]}
+              regular={byName[key].regular}
+              fullArt={byName[key].fullArt}
+              decks={decks}
+              onUpdate={onUpdate}
+              onDelete={onDelete}
+            />
           ))}
         </div>
       )}
