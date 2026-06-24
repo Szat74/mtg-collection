@@ -157,7 +157,7 @@ export default function DeckView({ decks, refresh, showToast }) {
     : 'var(--text-dim)';
 
   return (
-    <div className="dv-root">
+    <div className={`dv-root${selectedId ? ' dv-has-selection' : ''}`}>
       {/* ── Sidebar ── */}
       <div className="dv-sidebar">
         <div className="dv-sidebar-header">
@@ -197,6 +197,7 @@ export default function DeckView({ decks, refresh, showToast }) {
           </div>
         ) : (
           <>
+            <button className="dv-back-btn" onClick={() => setSelectedId(null)}>← Back</button>
             {/* Deck header */}
             <div className="dv-detail-header">
               <div className="dv-detail-title-row">

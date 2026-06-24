@@ -851,6 +851,12 @@ a { color: var(--gold); }
   background: rgba(0,0,0,0.65); color: #fff;
   font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
 }
+.dv-back-btn {
+  display: none; align-items: center; gap: 4px;
+  background: none; border: none; color: var(--accent);
+  font-size: 13px; font-weight: 500; cursor: pointer;
+  padding: 0 0 4px; flex-shrink: 0;
+}
 
 /* ── Settings View ──────────────────────────────────────────────────────────── */
 .settings-view {
@@ -928,4 +934,16 @@ a { color: var(--gold); }
   .import-right { width: 100%; }
   .stats-charts { grid-template-columns: 1fr; }
   .header-inner { flex-wrap: wrap; gap: 12px; }
+
+  /* Deck View mobile: one panel at a time */
+  .dv-root { flex-direction: column; }
+  .dv-sidebar { width: 100%; border-right: none; border-bottom: 1px solid var(--border); flex: 1; }
+  .dv-detail { display: none; padding: 12px 14px; gap: 10px; }
+  .dv-root.dv-has-selection .dv-sidebar { display: none; }
+  .dv-root.dv-has-selection .dv-detail {
+    display: flex; flex: 1; height: calc(100vh - 56px); overflow-y: auto;
+  }
+  .dv-back-btn { display: inline-flex; }
+  .dv-detail-name { font-size: 16px; }
+  .dv-card-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
 }
