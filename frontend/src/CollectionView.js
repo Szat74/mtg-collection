@@ -3,9 +3,269 @@ import React, { useState, useEffect } from 'react';
 const API = '/api';
 const RARITY_COLOR = { common: '#c0c0c0', uncommon: '#a8c4d4', rare: '#d4af37', mythic: '#e85c2e', special: '#c879ff' };
 
+const COLOR_NAMES = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green' };
+
+// ── Land section (compact list for basic lands) ───────────────────────────────
+const LAND_ORDER = ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest', 'Snow-Covered Plains', 'Snow-Covered Island', 'Snow-Covered Swamp', 'Snow-Covered Mountain', 'Snow-Covered Forest'];
+
+function LandRow({ land, decks, onUpdate, onDelete }) {
+  const [copies, setCopies] = useState(land.copies || []);
+
+  useEffect(() => { setCopies(land.copies || []); }, [land]);
+
+  const delAll = async () => {
+    if (!window.confirm(`Remove all ${land.quantity} cop${land.quantity === 1 ? 'y' : 'ies'} of ${land.name} (${land.set_code?.toUpperCase()})?`)) return;
+    await Promise.all(land.ids.map(id => fetch(`${API}/cards/${id}`, { method: 'DELETE' })));
+    onDelete(land.ids);
+  };
+
+  // Assign one unassigned copy to a deck
+  const increment = async (deckId) => {
+    const copy = copies.find(c => !c.deck_id);
+    if (!copy) return;
+    const res = await fetch(`${API}/cards/${copy.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deck_id: deckId }),
+    });
+    const updated = await res.json();
+    const next = copies.map(c => c.id === copy.id ? { ...c, deck_id: deckId } : c);
+    setCopies(next);
+    onUpdate([updated]);
+  };
+
+  // Return one copy from a deck back to unassigned
+  const decrement = async (deckId) => {
+    const copy = copies.find(c => c.deck_id === deckId);
+    if (!copy) return;
+    const res = await fetch(`${API}/cards/${copy.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deck_id: null }),
+    });
+    const updated = await res.json();
+    const next = copies.map(c => c.id === copy.id ? { ...c, deck_id: null } : c);
+    setCopies(next);
+    onUpdate([updated]);
+  };
+
+  // Build per-deck counts
+  const deckCountMap = {};
+  let unassigned = 0;
+  for (const copy of copies) {
+    if (copy.deck_id) deckCountMap[copy.deck_id] = (deckCountMap[copy.deck_id] || 0) + 1;
+    else unassigned++;
+  }
+  const assignedDecks = decks.filter(d => deckCountMap[d.id]);
+
+  const isFoil = !!land.foil;
+  const rawPrice = isFoil
+    ? (land.prices_usd_foil ?? land.prices_usd_etched ?? land.prices_usd)
+    : (land.prices_usd ?? land.prices_usd_foil ?? land.prices_usd_etched);
+  const price = rawPrice != null ? `$${parseFloat(rawPrice).toFixed(2)}` : '—';
+
+  return (
+    <div className={`land-row${isFoil ? ' foil' : ''}`}>
+      <div className="land-row-main">
+        <div className="land-thumb-wrap">
+          {land.image_uri
+            ? <img className="land-thumb" src={land.image_uri} alt={land.name} loading="lazy" />
+            : <div className="land-thumb land-thumb-empty" />
+          }
+          {isFoil && <span className="land-foil-badge">✦</span>}
+        </div>
+        <span className="land-set-badge">
+          {land.set_code?.toUpperCase()}{land.collector_number ? ` #${land.collector_number}` : ''}
+        </span>
+        {isFoil && <span className="land-foil-label">Foil</span>}
+        <span className="land-price">{price}</span>
+        <span className="land-qty">×{land.quantity}</span>
+        <button className="btn-sm btn-danger" onClick={delAll} title="Remove all copies">✕</button>
+      </div>
+
+      {/* Per-deck assignment rows */}
+      <div className="land-deck-rows">
+        {assignedDecks.map(deck => (
+          <div key={deck.id} className="land-deck-row">
+            <span className="land-deck-name">{deck.name}</span>
+            <button
+              className="btn-qty"
+              onClick={() => decrement(deck.id)}
+              disabled={!deckCountMap[deck.id]}
+            >−</button>
+            <span className="land-deck-count">{deckCountMap[deck.id] || 0}</span>
+            <button
+              className="btn-qty"
+              onClick={() => increment(deck.id)}
+              disabled={unassigned === 0}
+              title={unassigned === 0 ? 'No unassigned copies' : undefined}
+            >+</button>
+          </div>
+        ))}
+        {/* Unassigned row — only shown if there are any, or if no decks assigned yet */}
+        {(unassigned > 0 || assignedDecks.length === 0) && (
+          <div className="land-deck-row land-deck-unassigned">
+            <span className="land-deck-name">Unassigned</span>
+            <span className="land-deck-count">{unassigned}</span>
+            {decks.length > 0 && unassigned > 0 && (
+              <select
+                className="land-deck-assign-select"
+                defaultValue=""
+                onChange={e => { if (e.target.value) { increment(parseInt(e.target.value, 10)); e.target.value = ''; } }}
+              >
+                <option value="">+ assign to deck…</option>
+                {decks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LandNameGroup({ groupKey, displayName, regular, fullArt, decks, onUpdate, onDelete }) {
+  const [collapsed, setCollapsed] = useState(true);
+  const [galleryMode, setGalleryMode] = useState(false);
+
+  const total = [...regular, ...fullArt].reduce((s, l) => s + l.quantity, 0);
+  const hasFullArt = fullArt.length > 0;
+
+  return (
+    <div className="land-name-group">
+      <div className="land-name-heading" onClick={() => setCollapsed(c => !c)}>
+        <span className="land-name-toggle">{collapsed ? '▸' : '▾'}</span>
+        <span className="land-name-label">{displayName}</span>
+        <span className="land-name-total">×{total}</span>
+        {hasFullArt && !collapsed && (
+          <button
+            className={`btn-sm land-gallery-btn ${galleryMode ? 'btn-save' : ''}`}
+            onClick={e => { e.stopPropagation(); setGalleryMode(g => !g); }}
+            title="Toggle full-art gallery view"
+          >
+            {galleryMode ? '☰ List' : '⊞ Gallery'}
+          </button>
+        )}
+      </div>
+
+      {!collapsed && (
+        <>
+          {regular.length > 0 && (
+            <div className="land-art-group">
+              {hasFullArt && <div className="land-art-label">Regular</div>}
+              {regular.map(land => (
+                <LandRow key={land.ids[0]} land={land} decks={decks} onUpdate={onUpdate} onDelete={onDelete} />
+              ))}
+            </div>
+          )}
+
+          {hasFullArt && (
+            <div className="land-art-group">
+              <div className="land-art-label">Full Art</div>
+              {galleryMode ? (
+                <div className="land-gallery-grid">
+                  {fullArt.map(land => {
+                    const gFoil = !!land.foil;
+                    const gRawPrice = gFoil
+                      ? (land.prices_usd_foil ?? land.prices_usd_etched ?? land.prices_usd)
+                      : (land.prices_usd ?? land.prices_usd_foil ?? land.prices_usd_etched);
+                    const gPrice = gRawPrice != null ? `$${parseFloat(gRawPrice).toFixed(2)}` : '—';
+                    return (
+                      <div key={land.ids[0]} className={`land-gallery-tile${gFoil ? ' foil' : ''}`}>
+                        <div className="land-gallery-img-wrap">
+                          {land.image_uri
+                            ? <img src={land.image_uri} alt={land.name} loading="lazy" />
+                            : <div className="land-gallery-placeholder">{land.name}</div>
+                          }
+                          {gFoil && <span className="foil-badge">✦ Foil</span>}
+                          <span className="price-overlay">{gPrice}</span>
+                        </div>
+                        <div className="land-gallery-info">
+                          <span className="land-set-badge">
+                            {land.set_code?.toUpperCase()}{land.collector_number ? ` #${land.collector_number}` : ''}
+                          </span>
+                          <span className="land-qty">×{land.quantity}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                fullArt.map(land => (
+                  <LandRow key={land.ids[0]} land={land} decks={decks} onUpdate={onUpdate} onDelete={onDelete} />
+                ))
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function LandSection({ lands, decks, onUpdate, onDelete }) {
+  const [collapsed, setCollapsed] = useState(false);
+
+  // Group by name (case-insensitive), then by full_art
+  const byName = {};
+  const canonicalName = {}; // lowercased key → display name (prefer title-case)
+  for (const land of lands) {
+    const key = land.name.toLowerCase();
+    if (!byName[key]) {
+      byName[key] = { regular: [], fullArt: [] };
+      canonicalName[key] = land.name;
+    }
+    // Prefer the title-case version as the display name
+    if (land.name[0] === land.name[0].toUpperCase()) canonicalName[key] = land.name;
+    if (land.full_art) byName[key].fullArt.push(land);
+    else               byName[key].regular.push(land);
+  }
+
+  const orderedNames = [
+    ...LAND_ORDER.map(n => n.toLowerCase()).filter(k => byName[k]),
+    ...Object.keys(byName).filter(k => !LAND_ORDER.map(n => n.toLowerCase()).includes(k)).sort(),
+  ];
+
+  const total = lands.reduce((s, l) => s + l.quantity, 0);
+
+  return (
+    <div className="land-section">
+      <div className="land-section-header" onClick={() => setCollapsed(c => !c)}>
+        <span className="land-section-title">Basic Lands ({total})</span>
+        <span className="land-section-toggle">{collapsed ? '▸' : '▾'}</span>
+      </div>
+      {!collapsed && (
+        <div className="land-section-body">
+          {orderedNames.map(key => (
+            <LandNameGroup
+              key={key}
+              groupKey={key}
+              displayName={canonicalName[key]}
+              regular={byName[key].regular}
+              fullArt={byName[key].fullArt}
+              decks={decks}
+              onUpdate={onUpdate}
+              onDelete={onDelete}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Per-copy deck row inside the edit panel ───────────────────────────────────
-// decks: [{id, name}], copy.deck_id: integer|null
-function CopyRow({ copy, index, decks, onChange }) {
+function CopyRow({ copy, index, decks, cardColorIdentity, onChange }) {
+  const selectedDeck = decks.find(d => d.id === copy.deck_id) ?? null;
+
+  const identityFits = (deck) => {
+    if (deck.format !== 'commander' || !deck.commander_id || !deck.colors?.length) return true;
+    if (!cardColorIdentity?.length) return true; // colorless fits anywhere
+    return cardColorIdentity.every(c => deck.colors.includes(c));
+  };
+
+  const eligibleDecks = decks.filter(d => d.id === copy.deck_id || identityFits(d));
+
   return (
     <div className="copy-row">
       <span className="copy-label">Copy {index + 1}</span>
@@ -14,20 +274,25 @@ function CopyRow({ copy, index, decks, onChange }) {
         onChange={e => onChange(copy.id, e.target.value ? parseInt(e.target.value, 10) : null)}
       >
         <option value="">— unassigned —</option>
-        {decks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+        {eligibleDecks.map(d => (
+          <option key={d.id} value={d.id}>
+            {d.name}{d.format === 'commander' && !d.commander_id ? ' ⚠ no commander' : ''}
+          </option>
+        ))}
       </select>
     </div>
   );
 }
 
 // ── Card tile (grouped) ───────────────────────────────────────────────────────
-function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode, selected, onSelect }) {
-  const [editing, setEditing]     = useState(false);
-  const [foil, setFoil]           = useState(!!card.foil);
-  const [copies, setCopies]       = useState(card.copies || []);
+function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, onGroupCreated, bulkMode, selected, onSelect }) {
+  const [editing, setEditing]       = useState(false);
+  const [foil, setFoil]             = useState(!!card.foil);
+  const [copies, setCopies]         = useState(card.copies || []);
   // selGroups: Set of group IDs (integers)
-  const [selGroups, setSelGroups] = useState(() => new Set((card.groups || []).map(g => g.id)));
-  const [flipped, setFlipped]     = useState(false);
+  const [selGroups, setSelGroups]   = useState(() => new Set((card.groups || []).map(g => g.id)));
+  const [flipped, setFlipped]       = useState(false);
+  const [groupSearch, setGroupSearch] = useState('');
 
   useEffect(() => {
     setCopies(card.copies || []);
@@ -40,6 +305,21 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
       next.has(gid) ? next.delete(gid) : next.add(gid);
       return next;
     });
+
+  const createGroupByName = async (name) => {
+    if (!name) return;
+    const res = await fetch(`${API}/groups`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (res.ok) {
+      const g = await res.json();
+      onGroupCreated(g);
+      setSelGroups(prev => new Set([...prev, g.id]));
+      setGroupSearch('');
+    }
+  };
 
   const setCopyDeck = (id, deckId) =>
     setCopies(prev => prev.map(c => c.id === id ? { ...c, deck_id: deckId } : c));
@@ -114,8 +394,8 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
         }
         {hasBack && <span className="flip-hint">↻</span>}
         {isFoil && <span className="foil-badge">✦ Foil</span>}
+        {price && <span className="price-overlay">{price}</span>}
       </div>
-      {price && <div className="price-badge">{price}</div>}
       <div className="card-info">
         <div className="card-name">{card.name}</div>
         <div className="card-meta">
@@ -170,19 +450,60 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
                   copy={copy}
                   index={i}
                   decks={decks}
+                  cardColorIdentity={card.color_identity ? JSON.parse(card.color_identity) : []}
                   onChange={setCopyDeck}
                 />
               ))}
             </div>
 
             <label>Groups</label>
-            <div className="multi-select-list">
-              {(groups || []).map(g => (
-                <label key={g.id} className="multi-select-item">
-                  <input type="checkbox" checked={selGroups.has(g.id)} onChange={() => toggleGroup(g.id)} />
-                  {g.name}
-                </label>
-              ))}
+            {/* Selected groups — uncheck to remove */}
+            {selGroups.size > 0 && (
+              <div className="group-selected-list">
+                {(groups || []).filter(g => selGroups.has(g.id)).map(g => (
+                  <label key={g.id} className="multi-select-item">
+                    <input type="checkbox" checked onChange={() => toggleGroup(g.id)} />
+                    {g.name}
+                  </label>
+                ))}
+              </div>
+            )}
+            {/* Searchable dropdown for adding groups */}
+            <div className="group-search-wrap">
+              <input
+                className="new-group-input"
+                placeholder="Search or create tag…"
+                value={groupSearch}
+                onChange={e => setGroupSearch(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    const q = groupSearch.trim();
+                    const match = (groups || []).find(g => g.name.toLowerCase() === q.toLowerCase());
+                    if (match) { toggleGroup(match.id); setGroupSearch(''); }
+                    else if (q) { setNewGroupName(q); createGroupByName(q); }
+                  }
+                  if (e.key === 'Escape') setGroupSearch('');
+                }}
+              />
+              {groupSearch.trim() && (
+                <div className="group-dropdown">
+                  {(groups || [])
+                    .filter(g => !selGroups.has(g.id) && g.name.toLowerCase().includes(groupSearch.toLowerCase()))
+                    .map(g => (
+                      <div key={g.id} className="group-dropdown-item"
+                        onMouseDown={e => { e.preventDefault(); toggleGroup(g.id); setGroupSearch(''); }}>
+                        {g.name}
+                      </div>
+                    ))
+                  }
+                  {!(groups || []).some(g => g.name.toLowerCase() === groupSearch.trim().toLowerCase()) && (
+                    <div className="group-dropdown-item group-dropdown-create"
+                      onMouseDown={e => { e.preventDefault(); createGroupByName(groupSearch.trim()); }}>
+                      + Create "{groupSearch.trim()}"
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="edit-btns">
@@ -198,7 +519,7 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, bulkMode
 
 // ── Collection view ───────────────────────────────────────────────────────────
 // decks: [{id, name, ...}], groups: [{id, name}]
-export default function CollectionView({ cards: initialCards, decks, groups, fetchCards, refresh, showToast }) {
+export default function CollectionView({ cards: initialCards, decks, groups, onGroupCreated, fetchCards, refresh, showToast }) {
   const [cards, setCards]               = useState(initialCards);
   const [search, setSearch]             = useState('');
   const [filterDeck, setFilterDeck]     = useState('');   // deck id (string of int) or ''
@@ -488,27 +809,44 @@ export default function CollectionView({ cards: initialCards, decks, groups, fet
         </div>
       )}
 
-      {cards.length === 0
-        ? <div className="empty-state">No cards found. Add some to your collection!</div>
-        : (
-          <div className="card-grid">
-            {cards.map(card => (
-              <CardTile
-                key={card.ids[0]}
-                card={card}
+      {(() => {
+        const landCards    = cards.filter(c => c.type_line?.startsWith('Basic Land'));
+        const regularCards = cards.filter(c => !c.type_line?.startsWith('Basic Land'));
+        return (
+          <>
+            {landCards.length > 0 && (
+              <LandSection
+                lands={landCards}
                 decks={decks}
-                groups={groups}
                 onUpdate={handleUpdate}
                 onDelete={handleDelete}
-                onAddCopy={handleAddCopy}
-                bulkMode={bulkMode}
-                selected={card.ids.every(id => selectedIds.has(id))}
-                onSelect={toggleSelectGroup}
               />
-            ))}
-          </div>
-        )
-      }
+            )}
+            {regularCards.length === 0 && landCards.length === 0
+              ? <div className="empty-state">No cards found. Add some to your collection!</div>
+              : regularCards.length > 0 && (
+                <div className="card-grid">
+                  {regularCards.map(card => (
+                    <CardTile
+                      key={card.ids[0]}
+                      card={card}
+                      decks={decks}
+                      groups={groups}
+                      onUpdate={handleUpdate}
+                      onDelete={handleDelete}
+                      onAddCopy={handleAddCopy}
+                      onGroupCreated={onGroupCreated}
+                      bulkMode={bulkMode}
+                      selected={card.ids.every(id => selectedIds.has(id))}
+                      onSelect={toggleSelectGroup}
+                    />
+                  ))}
+                </div>
+              )
+            }
+          </>
+        );
+      })()}
     </div>
   );
 }

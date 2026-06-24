@@ -56,6 +56,92 @@ function ColorPicker({ value, onChange }) {
   );
 }
 
+// ── Commander / Partner picker ────────────────────────────────────────────────
+function CmdPicker({ deck, label, currentName, field, filterFn, emptyMsg, onSave }) {
+  const [open, setOpen]     = useState(false);
+  const [query, setQuery]   = useState('');
+  const [cards, setCards]   = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res  = await fetch(`${API}/cards?deck=${deck.id}`);
+      const data = await res.json();
+      setCards(filterFn ? data.filter(filterFn) : data);
+    } catch { setCards([]); }
+    setLoading(false);
+  };
+
+  const openPicker = () => { setOpen(true); setQuery(''); load(); };
+  const close      = () => { setOpen(false); setQuery(''); };
+  const pick       = (card) => { onSave(deck.id, { [field]: card.ids[0] }); close(); };
+  const clear      = () => { onSave(deck.id, { [field]: null }); };
+
+  const filtered = cards.filter(c => !query || c.name.toLowerCase().includes(query.toLowerCase()));
+
+  return (
+    <div className="dm-commander-wrap">
+      <span className="dm-commander-label">{label}</span>
+      {currentName
+        ? <>
+            <span className="dm-commander-name">{currentName}</span>
+            <button className="dm-btn dm-btn-ghost dm-btn-xs" onClick={openPicker} title={`Change ${label}`}>✎</button>
+            <button className="dm-btn dm-btn-danger dm-btn-xs" onClick={clear} title={`Remove ${label}`}>✕</button>
+          </>
+        : <button className="dm-btn dm-btn-ghost dm-btn-xs" onClick={openPicker}>Set {label.toLowerCase()}…</button>
+      }
+      {open && (
+        <div className="dm-cmd-picker">
+          <div className="dm-cmd-picker-header">
+            <span>{emptyMsg ? 'Pick from this deck' : `Pick ${label}`}</span>
+            <button className="dm-close" onClick={close}>✕</button>
+          </div>
+          <input className="dm-rename-input" placeholder="Filter…" value={query}
+            autoFocus onChange={e => setQuery(e.target.value)} />
+          <div className="dm-cmd-list">
+            {loading && <div className="dm-empty">Loading…</div>}
+            {!loading && filtered.length === 0 && (
+              <div className="dm-empty">{emptyMsg || 'No matches'}</div>
+            )}
+            {filtered.map(c => (
+              <div key={c.ids[0]} className="dm-cmd-item" onClick={() => pick(c)}>
+                <span className="dm-cmd-item-name">{c.name}</span>
+                <span className="dm-cmd-item-type">{c.type_line}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CommanderPicker({ deck, onSave }) {
+  return (
+    <CmdPicker
+      deck={deck} label="Commander:" currentName={deck.commander_name}
+      field="commander_id"
+      filterFn={c => c.type_line?.includes('Legendary')}
+      emptyMsg="No Legendary cards in this deck yet"
+      onSave={onSave}
+    />
+  );
+}
+
+function PartnerPicker({ deck, onSave }) {
+  if (!deck.commander_name) return null;
+  return (
+    <CmdPicker
+      deck={deck} label="Partner:" currentName={deck.partner_name}
+      field="partner_id"
+      filterFn={c => c.type_line?.includes('Legendary') && c.name !== deck.commander_name}
+      emptyMsg="No other Legendary cards in this deck"
+      onSave={onSave}
+    />
+  );
+}
+
 // ── Deck row (view mode) ──────────────────────────────────────────────────────
 function DeckRow({ deck, onSave, onDelete }) {
   const [editing, setEditing]       = useState(false);
@@ -78,12 +164,15 @@ function DeckRow({ deck, onSave, onDelete }) {
   const commitEdit = () => {
     const trimmed = nameVal.trim();
     if (!trimmed) return;
-    onSave(deck.id, {
+    const payload = {
       name:        trimmed,
-      colors:      colorsVal,
-      format:      formatVal || null,
       description: descVal.trim() || null,
-    });
+    };
+    // Only send format if not already set (format is locked once chosen)
+    if (!deck.format) payload.format = formatVal || null;
+    // Only send colors for non-commander decks (commander colors auto-derive from commander/partner)
+    if (deck.format !== 'commander') payload.colors = colorsVal;
+    onSave(deck.id, payload);
     setEditing(false);
   };
 
@@ -107,15 +196,19 @@ function DeckRow({ deck, onSave, onDelete }) {
             onKeyDown={e => { if (e.key === 'Enter') commitEdit(); if (e.key === 'Escape') cancelEdit(); }}
             placeholder="Deck name"
           />
-          <select
-            className="dm-format-select"
-            value={formatVal}
-            onChange={e => setFormatVal(e.target.value)}
-          >
-            <option value="">— Format —</option>
-            {FORMATS.map(f => <option key={f} value={f}>{f.charAt(0).toUpperCase() + f.slice(1)}</option>)}
-          </select>
-          <ColorPicker value={colorsVal} onChange={setColorsVal} />
+          {deck.format
+            ? <span className="dm-format-locked">🔒 {deck.format.charAt(0).toUpperCase() + deck.format.slice(1)}</span>
+            : (
+              <select className="dm-format-select" value={formatVal} onChange={e => setFormatVal(e.target.value)}>
+                <option value="">— Format —</option>
+                {FORMATS.map(f => <option key={f} value={f}>{f.charAt(0).toUpperCase() + f.slice(1)}</option>)}
+              </select>
+            )
+          }
+          {deck.format === 'commander'
+            ? <span className="dm-colors-auto-note">Colors derive from commander(s)</span>
+            : <ColorPicker value={colorsVal} onChange={setColorsVal} />
+          }
           <textarea
             className="dm-desc-input"
             placeholder="Description (optional)"
@@ -143,6 +236,12 @@ function DeckRow({ deck, onSave, onDelete }) {
           <ColorPips colors={deck.colors} />
           {deck.description && <span className="dm-deck-desc">{deck.description}</span>}
         </div>
+        {deck.format === 'commander' && (
+          <>
+            <CommanderPicker deck={deck} onSave={onSave} />
+            <PartnerPicker deck={deck} onSave={onSave} />
+          </>
+        )}
       </div>
       <div className="dm-deck-right">
         <span className="dm-card-count">{deck.cardCount} cards</span>
@@ -233,10 +332,14 @@ export function DeckManager({ onDecksChanged }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(fields),
       });
-      if (!res.ok) { showToast('Save failed'); return; }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Save failed');
+        return;
+      }
       await loadDecks();
       onDecksChanged?.();
-      showToast(`Saved "${fields.name}"`);
+      showToast(fields.name ? `Saved "${fields.name}"` : 'Saved');
     } catch {
       showToast('Save failed');
     }
@@ -329,7 +432,7 @@ export function DeckManager({ onDecksChanged }) {
           display: flex; align-items: center; gap: 7px;
           padding: 10px 18px 10px 14px;
           background: #1a1a2e; border: 1px solid #3a3a5c; border-radius: 28px;
-          color: #c8b06a; font-family: 'Georgia', serif; font-size: 14px;
+          color: #c8b06a; font-family: var(--font-body); font-size: 14px;
           font-weight: 600; letter-spacing: 0.04em; cursor: pointer;
           box-shadow: 0 4px 20px rgba(0,0,0,0.5), 0 0 0 1px rgba(200,176,106,0.15);
           transition: background 0.18s, box-shadow 0.18s, transform 0.12s;
@@ -351,7 +454,7 @@ export function DeckManager({ onDecksChanged }) {
           background: #12121e; border: 1px solid #2e2e4a; border-radius: 14px;
           box-shadow: 0 16px 60px rgba(0,0,0,0.7), 0 0 0 1px rgba(200,176,106,0.1);
           overflow: hidden; animation: dm-slide-up 0.2s cubic-bezier(0.22,1,0.36,1);
-          font-family: 'Georgia', serif;
+          font-family: var(--font-body);
         }
         .dm-header {
           display: flex; align-items: center; justify-content: space-between;
@@ -418,7 +521,7 @@ export function DeckManager({ onDecksChanged }) {
         /* Shared inputs */
         .dm-rename-input, .dm-format-select, .dm-desc-input, .dm-create-input {
           background: #0e0e1a; border: 1px solid #3a3a5c; border-radius: 6px;
-          color: #ddd; font-size: 13px; font-family: 'Georgia', serif;
+          color: #ddd; font-size: 13px; font-family: var(--font-body);
           padding: 6px 10px; outline: none; transition: border-color 0.15s;
           width: 100%; box-sizing: border-box;
         }
@@ -460,7 +563,7 @@ export function DeckManager({ onDecksChanged }) {
         /* Buttons */
         .dm-btn {
           border: none; border-radius: 6px; font-size: 12px;
-          font-family: 'Georgia', serif; font-weight: 600; padding: 5px 11px;
+          font-family: var(--font-body); font-weight: 600; padding: 5px 11px;
           cursor: pointer; transition: background 0.15s, opacity 0.15s; white-space: nowrap;
         }
         .dm-btn:disabled { opacity: 0.4; cursor: default; }
@@ -495,6 +598,46 @@ export function DeckManager({ onDecksChanged }) {
           75%  { opacity: 1 }
           100% { opacity: 0 }
         }
+
+        /* Commander picker */
+        .dm-commander-wrap {
+          display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+          margin-top: 4px; font-size: 11px;
+        }
+        .dm-format-locked {
+          font-size: 12px; color: #7ab0e0; font-weight: 600;
+          background: #1e2a3a; border: 1px solid #2a4060;
+          padding: 4px 10px; border-radius: 6px; letter-spacing: 0.04em;
+        }
+        .dm-colors-auto-note {
+          font-size: 11px; color: #666; font-style: italic;
+        }
+        .dm-commander-label { color: #666; flex-shrink: 0; }
+        .dm-commander-name { color: #c8b06a; font-style: italic; }
+        .dm-btn-xs { padding: 2px 6px; font-size: 10px; }
+        .dm-cmd-picker {
+          position: absolute; left: 10px; right: 10px; z-index: 1100;
+          background: #12121e; border: 1px solid #3a3a5c; border-radius: 10px;
+          box-shadow: 0 8px 32px rgba(0,0,0,0.7); padding: 12px;
+          display: flex; flex-direction: column; gap: 8px;
+        }
+        .dm-cmd-picker-header {
+          display: flex; justify-content: space-between; align-items: center;
+          font-size: 12px; color: #aaa;
+        }
+        .dm-cmd-list {
+          max-height: 160px; overflow-y: auto;
+          display: flex; flex-direction: column; gap: 2px;
+          scrollbar-width: thin; scrollbar-color: #2e2e4a #0e0e1a;
+        }
+        .dm-cmd-item {
+          padding: 6px 10px; border-radius: 6px; cursor: pointer;
+          display: flex; flex-direction: column; gap: 2px;
+          transition: background 0.12s;
+        }
+        .dm-cmd-item:hover { background: #1e1e32; }
+        .dm-cmd-item-name { color: #ddd; font-size: 13px; }
+        .dm-cmd-item-type { color: #666; font-size: 10px; font-style: italic; }
       `}</style>
     </>
   );

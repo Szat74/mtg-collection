@@ -4,7 +4,8 @@ import CollectionView from './CollectionView';
 import AddCardView from './AddCardView';
 import ImportView from './ImportView';
 import StatsView from './StatsView';
-import { DeckManager } from './DeckManager';
+import SettingsView from './SettingsView';
+import DeckView from './DeckView';
 
 const API = '/api';
 
@@ -22,25 +23,36 @@ export default function App() {
   };
 
   const fetchCards = useCallback(async (params = {}) => {
-    const qs = new URLSearchParams(params).toString();
-    const res = await fetch(`${API}/cards${qs ? '?' + qs : ''}`);
-    setCards(await res.json());
+    try {
+      const qs = new URLSearchParams(params).toString();
+      const res = await fetch(`${API}/cards${qs ? '?' + qs : ''}`);
+      if (!res.ok) return;
+      setCards(await res.json());
+    } catch {}
   }, []);
 
   const fetchStats = useCallback(async () => {
-    const res = await fetch(`${API}/stats`);
-    setStats(await res.json());
+    try {
+      const res = await fetch(`${API}/stats`);
+      if (!res.ok) return;
+      setStats(await res.json());
+    } catch {}
   }, []);
 
   const fetchDecks = useCallback(async () => {
-    const res = await fetch(`${API}/decks`);
-    const data = await res.json();
-    setDecks(data);
+    try {
+      const res = await fetch(`${API}/decks`);
+      if (!res.ok) return;
+      setDecks(await res.json());
+    } catch {}
   }, []);
 
   const fetchGroups = useCallback(async () => {
-    const res = await fetch(`${API}/groups`);
-    setGroups(await res.json());
+    try {
+      const res = await fetch(`${API}/groups`);
+      if (!res.ok) return;
+      setGroups(await res.json());
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -63,9 +75,11 @@ export default function App() {
           <nav className="nav">
             {[
               { id: 'collection', label: 'Collection' },
+              { id: 'decks',      label: 'Decks' },
               { id: 'add',        label: 'Add Card' },
               { id: 'import',     label: 'Bulk Import' },
               { id: 'stats',      label: 'Stats' },
+              { id: 'settings',   label: 'Settings' },
             ].map(({ id, label }) => (
               <button
                 key={id}
@@ -76,21 +90,19 @@ export default function App() {
               </button>
             ))}
           </nav>
-          <button className="export-btn" onClick={() => window.open(`${API}/export/csv`)}>
-            ↓ Export CSV
-          </button>
         </div>
       </header>
 
       <main className="app-main">
         {view === 'collection' && (
-		  <>
-            <CollectionView
-              cards={cards} decks={decks} groups={groups}
-              fetchCards={fetchCards} refresh={refresh} showToast={showToast}
-            />
-            <DeckManager onDecksChanged={refresh} />
-          </>
+          <CollectionView
+            cards={cards} decks={decks} groups={groups}
+            onGroupCreated={g => setGroups(prev => [...prev, g].sort((a, b) => a.name.localeCompare(b.name)))}
+            fetchCards={fetchCards} refresh={refresh} showToast={showToast}
+          />
+        )}
+        {view === 'decks' && (
+          <DeckView decks={decks} refresh={refresh} showToast={showToast} />
         )}
         {view === 'add' && (
           <AddCardView
@@ -103,6 +115,9 @@ export default function App() {
         )}
         {view === 'stats' && (
           <StatsView stats={stats} />
+        )}
+        {view === 'settings' && (
+          <SettingsView showToast={showToast} />
         )}
       </main>
       {toast && <div className={`toast toast-${toast.type}`}>{toast.msg}</div>}
