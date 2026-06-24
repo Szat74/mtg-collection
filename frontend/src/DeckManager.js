@@ -410,7 +410,7 @@ export function DeckManager({ onDecksChanged }) {
           display: flex; align-items: center; gap: 7px;
           padding: 10px 18px 10px 14px;
           background: #1a1a2e; border: 1px solid #3a3a5c; border-radius: 28px;
-          color: #c8b06a; font-family: 'Georgia', serif; font-size: 14px;
+          color: #c8b06a; font-family: var(--font-body); font-size: 14px;
           font-weight: 600; letter-spacing: 0.04em; cursor: pointer;
           box-shadow: 0 4px 20px rgba(0,0,0,0.5), 0 0 0 1px rgba(200,176,106,0.15);
           transition: background 0.18s, box-shadow 0.18s, transform 0.12s;
@@ -432,7 +432,7 @@ export function DeckManager({ onDecksChanged }) {
           background: #12121e; border: 1px solid #2e2e4a; border-radius: 14px;
           box-shadow: 0 16px 60px rgba(0,0,0,0.7), 0 0 0 1px rgba(200,176,106,0.1);
           overflow: hidden; animation: dm-slide-up 0.2s cubic-bezier(0.22,1,0.36,1);
-          font-family: 'Georgia', serif;
+          font-family: var(--font-body);
         }
         .dm-header {
           display: flex; align-items: center; justify-content: space-between;
@@ -499,7 +499,7 @@ export function DeckManager({ onDecksChanged }) {
         /* Shared inputs */
         .dm-rename-input, .dm-format-select, .dm-desc-input, .dm-create-input {
           background: #0e0e1a; border: 1px solid #3a3a5c; border-radius: 6px;
-          color: #ddd; font-size: 13px; font-family: 'Georgia', serif;
+          color: #ddd; font-size: 13px; font-family: var(--font-body);
           padding: 6px 10px; outline: none; transition: border-color 0.15s;
           width: 100%; box-sizing: border-box;
         }
@@ -541,7 +541,7 @@ export function DeckManager({ onDecksChanged }) {
         /* Buttons */
         .dm-btn {
           border: none; border-radius: 6px; font-size: 12px;
-          font-family: 'Georgia', serif; font-weight: 600; padding: 5px 11px;
+          font-family: var(--font-body); font-weight: 600; padding: 5px 11px;
           cursor: pointer; transition: background 0.15s, opacity 0.15s; white-space: nowrap;
         }
         .dm-btn:disabled { opacity: 0.4; cursor: default; }

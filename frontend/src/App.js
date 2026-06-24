@@ -4,6 +4,7 @@ import CollectionView from './CollectionView';
 import AddCardView from './AddCardView';
 import ImportView from './ImportView';
 import StatsView from './StatsView';
+import SettingsView from './SettingsView';
 import { DeckManager } from './DeckManager';
 
 const API = '/api';
@@ -77,6 +78,7 @@ export default function App() {
               { id: 'add',        label: 'Add Card' },
               { id: 'import',     label: 'Bulk Import' },
               { id: 'stats',      label: 'Stats' },
+              { id: 'settings',   label: 'Settings' },
             ].map(({ id, label }) => (
               <button
                 key={id}
@@ -87,9 +89,6 @@ export default function App() {
               </button>
             ))}
           </nav>
-          <button className="export-btn" onClick={() => window.open(`${API}/export/csv`)}>
-            ↓ Export CSV
-          </button>
         </div>
       </header>
 
@@ -115,6 +114,9 @@ export default function App() {
         )}
         {view === 'stats' && (
           <StatsView stats={stats} />
+        )}
+        {view === 'settings' && (
+          <SettingsView showToast={showToast} />
         )}
       </main>
       {toast && <div className={`toast toast-${toast.type}`}>{toast.msg}</div>}

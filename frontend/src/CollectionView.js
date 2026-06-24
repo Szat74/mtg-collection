@@ -5,6 +5,150 @@ const RARITY_COLOR = { common: '#c0c0c0', uncommon: '#a8c4d4', rare: '#d4af37', 
 
 const COLOR_NAMES = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green' };
 
+// ── Land section (compact list for basic lands) ───────────────────────────────
+const LAND_ORDER = ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest', 'Snow-Covered Plains', 'Snow-Covered Island', 'Snow-Covered Swamp', 'Snow-Covered Mountain', 'Snow-Covered Forest'];
+
+function LandRow({ land, decks, onUpdate, onDelete }) {
+  const [editing, setEditing] = useState(false);
+  const [copies, setCopies]   = useState(land.copies || []);
+
+  useEffect(() => { setCopies(land.copies || []); }, [land]);
+
+  const setCopyDeck = (id, deckId) =>
+    setCopies(prev => prev.map(c => c.id === id ? { ...c, deck_id: deckId } : c));
+
+  const save = async () => {
+    const updated = await Promise.all(copies.map(copy =>
+      fetch(`${API}/cards/${copy.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deck_id: copy.deck_id ?? null }),
+      }).then(r => r.json())
+    ));
+    onUpdate(updated);
+    setEditing(false);
+  };
+
+  const delAll = async () => {
+    if (!window.confirm(`Remove all ${land.quantity} cop${land.quantity === 1 ? 'y' : 'ies'} of ${land.name} (${land.set_code?.toUpperCase()})?`)) return;
+    await Promise.all(land.ids.map(id => fetch(`${API}/cards/${id}`, { method: 'DELETE' })));
+    onDelete(land.ids);
+  };
+
+  // Build deck summary: "4 in Elfball · 8 unassigned"
+  const deckCounts = {};
+  let unassigned = 0;
+  for (const copy of (land.copies || [])) {
+    if (copy.deck_id) {
+      const deck = decks.find(d => d.id === copy.deck_id);
+      const label = deck?.name ?? `#${copy.deck_id}`;
+      deckCounts[label] = (deckCounts[label] || 0) + 1;
+    } else {
+      unassigned++;
+    }
+  }
+  const summaryParts = Object.entries(deckCounts).map(([name, n]) => `${n} in ${name}`);
+  if (unassigned > 0) summaryParts.push(`${unassigned} unassigned`);
+  const summary = summaryParts.join(' · ');
+
+  const cardColorIdentity = land.color_identity ? JSON.parse(land.color_identity) : [];
+
+  return (
+    <div className="land-row">
+      <div className="land-row-main">
+        {land.image_uri
+          ? <img className="land-thumb" src={land.image_uri} alt={land.name} loading="lazy" />
+          : <div className="land-thumb land-thumb-empty" />
+        }
+        <span className="land-set-badge">
+          {land.set_code?.toUpperCase()}{land.collector_number ? ` #${land.collector_number}` : ''}
+        </span>
+        <span className="land-qty">×{land.quantity}</span>
+        <span className="land-summary">{summary}</span>
+        <div className="land-actions">
+          <button className="btn-sm" onClick={() => setEditing(e => !e)}>
+            {editing ? 'Cancel' : 'Edit'}
+          </button>
+          <button className="btn-sm btn-danger" onClick={delAll} title="Remove all copies">✕</button>
+        </div>
+      </div>
+      {editing && (
+        <div className="land-row-edit">
+          {copies.map((copy, i) => (
+            <CopyRow
+              key={copy.id}
+              copy={copy}
+              index={i}
+              decks={decks}
+              cardColorIdentity={cardColorIdentity}
+              onChange={setCopyDeck}
+            />
+          ))}
+          <div className="edit-btns">
+            <button className="btn-sm btn-save" onClick={save}>Save</button>
+            <button className="btn-sm" onClick={() => { setCopies(land.copies || []); setEditing(false); }}>Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LandSection({ lands, decks, onUpdate, onDelete }) {
+  const [collapsed, setCollapsed] = useState(false);
+
+  // Group by name, then by full_art
+  const byName = {};
+  for (const land of lands) {
+    if (!byName[land.name]) byName[land.name] = { regular: [], fullArt: [] };
+    if (land.full_art) byName[land.name].fullArt.push(land);
+    else               byName[land.name].regular.push(land);
+  }
+
+  const orderedNames = [
+    ...LAND_ORDER.filter(n => byName[n]),
+    ...Object.keys(byName).filter(n => !LAND_ORDER.includes(n)).sort(),
+  ];
+
+  const total = lands.reduce((s, l) => s + l.quantity, 0);
+
+  return (
+    <div className="land-section">
+      <div className="land-section-header" onClick={() => setCollapsed(c => !c)}>
+        <span className="land-section-title">Basic Lands ({total})</span>
+        <span className="land-section-toggle">{collapsed ? '▸' : '▾'}</span>
+      </div>
+      {!collapsed && (
+        <div className="land-section-body">
+          {orderedNames.map(name => (
+            <div key={name} className="land-name-group">
+              <div className="land-name-heading">{name}</div>
+              {byName[name].regular.length > 0 && (
+                <div className="land-art-group">
+                  {byName[name].fullArt.length > 0 && (
+                    <div className="land-art-label">Regular</div>
+                  )}
+                  {byName[name].regular.map(land => (
+                    <LandRow key={land.ids[0]} land={land} decks={decks} onUpdate={onUpdate} onDelete={onDelete} />
+                  ))}
+                </div>
+              )}
+              {byName[name].fullArt.length > 0 && (
+                <div className="land-art-group">
+                  <div className="land-art-label">Full Art</div>
+                  {byName[name].fullArt.map(land => (
+                    <LandRow key={land.ids[0]} land={land} decks={decks} onUpdate={onUpdate} onDelete={onDelete} />
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Per-copy deck row inside the edit panel ───────────────────────────────────
 function CopyRow({ copy, index, decks, cardColorIdentity, onChange }) {
   const selectedDeck = decks.find(d => d.id === copy.deck_id) ?? null;
@@ -145,8 +289,8 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, onGroupC
         }
         {hasBack && <span className="flip-hint">↻</span>}
         {isFoil && <span className="foil-badge">✦ Foil</span>}
+        {price && <span className="price-overlay">{price}</span>}
       </div>
-      {price && <div className="price-badge">{price}</div>}
       <div className="card-info">
         <div className="card-name">{card.name}</div>
         <div className="card-meta">
@@ -560,28 +704,44 @@ export default function CollectionView({ cards: initialCards, decks, groups, onG
         </div>
       )}
 
-      {cards.length === 0
-        ? <div className="empty-state">No cards found. Add some to your collection!</div>
-        : (
-          <div className="card-grid">
-            {cards.map(card => (
-              <CardTile
-                key={card.ids[0]}
-                card={card}
+      {(() => {
+        const landCards    = cards.filter(c => c.type_line?.startsWith('Basic Land'));
+        const regularCards = cards.filter(c => !c.type_line?.startsWith('Basic Land'));
+        return (
+          <>
+            {landCards.length > 0 && (
+              <LandSection
+                lands={landCards}
                 decks={decks}
-                groups={groups}
                 onUpdate={handleUpdate}
                 onDelete={handleDelete}
-                onAddCopy={handleAddCopy}
-                onGroupCreated={onGroupCreated}
-                bulkMode={bulkMode}
-                selected={card.ids.every(id => selectedIds.has(id))}
-                onSelect={toggleSelectGroup}
               />
-            ))}
-          </div>
-        )
-      }
+            )}
+            {regularCards.length === 0 && landCards.length === 0
+              ? <div className="empty-state">No cards found. Add some to your collection!</div>
+              : regularCards.length > 0 && (
+                <div className="card-grid">
+                  {regularCards.map(card => (
+                    <CardTile
+                      key={card.ids[0]}
+                      card={card}
+                      decks={decks}
+                      groups={groups}
+                      onUpdate={handleUpdate}
+                      onDelete={handleDelete}
+                      onAddCopy={handleAddCopy}
+                      onGroupCreated={onGroupCreated}
+                      bulkMode={bulkMode}
+                      selected={card.ids.every(id => selectedIds.has(id))}
+                      onSelect={toggleSelectGroup}
+                    />
+                  ))}
+                </div>
+              )
+            }
+          </>
+        );
+      })()}
     </div>
   );
 }

@@ -86,6 +86,7 @@ db.exec(`
 
 // Migrate: add color_identity column if it doesn't exist yet
 try { db.exec('ALTER TABLE card_cache ADD COLUMN color_identity TEXT'); } catch {}
+try { db.exec('ALTER TABLE card_cache ADD COLUMN full_art INTEGER DEFAULT 0'); } catch {}
 
 // ─── Fetch helper ─────────────────────────────────────────────────────────────
 async function scryFetch(url, options = {}) {
@@ -122,11 +123,11 @@ async function refreshBulkCache() {
     const upsert = db.prepare(`
       INSERT INTO card_cache
         (scryfall_id, name, set_code, set_name, collector_number, image_uri, image_back,
-         mana_cost, type_line, oracle_text, colors, color_identity, rarity,
+         mana_cost, type_line, oracle_text, colors, color_identity, full_art, rarity,
          prices_usd, prices_usd_foil, prices_usd_etched, foil_only, cached_at)
       VALUES
         (@scryfall_id, @name, @set_code, @set_name, @collector_number, @image_uri, @image_back,
-         @mana_cost, @type_line, @oracle_text, @colors, @color_identity, @rarity,
+         @mana_cost, @type_line, @oracle_text, @colors, @color_identity, @full_art, @rarity,
          @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, datetime('now'))
       ON CONFLICT(scryfall_id) DO UPDATE SET
         name=excluded.name, set_code=excluded.set_code, set_name=excluded.set_name,
@@ -134,7 +135,7 @@ async function refreshBulkCache() {
         image_uri=excluded.image_uri, image_back=excluded.image_back,
         mana_cost=excluded.mana_cost, type_line=excluded.type_line,
         oracle_text=excluded.oracle_text, colors=excluded.colors,
-        color_identity=excluded.color_identity,
+        color_identity=excluded.color_identity, full_art=excluded.full_art,
         rarity=excluded.rarity,
         prices_usd=excluded.prices_usd, prices_usd_foil=excluded.prices_usd_foil,
         prices_usd_etched=excluded.prices_usd_etched, foil_only=excluded.foil_only,
@@ -186,6 +187,7 @@ function cardToRow(c) {
     oracle_text:      c.oracle_text  ?? null,
     colors:           c.colors          ? JSON.stringify(c.colors)          : null,
     color_identity:   c.color_identity  ? JSON.stringify(c.color_identity)  : null,
+    full_art:         c.full_art        ? 1 : 0,
     rarity:           c.rarity       ?? null,
     ...parsePrices(c.prices),
     foil_only: (c.foil === true && c.nonfoil === false) ? 1 : 0,
@@ -240,6 +242,7 @@ function cacheRowToScryfall(c) {
     oracle_text:      c.oracle_text,
     colors:           c.colors          ? JSON.parse(c.colors)          : [],
     color_identity:   c.color_identity  ? JSON.parse(c.color_identity)  : [],
+    full_art:         !!c.full_art,
     rarity:           c.rarity,
     prices:           formatPrices(c),
   };
@@ -264,6 +267,7 @@ function mergeCache(collRow) {
     oracle_text:      cache?.oracle_text      ?? null,
     colors:           cache?.colors          ?? null,
     color_identity:   cache?.color_identity  ?? null,
+    full_art:         cache?.full_art        ?? 0,
     rarity:           cache?.rarity          ?? null,
     prices_usd:       cache?.prices_usd       ?? null,
     prices_usd_foil:  cache?.prices_usd_foil  ?? null,
@@ -452,11 +456,11 @@ app.post('/api/cards', (req, res) => {
       db.prepare(`
         INSERT OR IGNORE INTO card_cache
           (scryfall_id, name, set_code, set_name, collector_number, image_uri, image_back,
-           mana_cost, type_line, oracle_text, colors, color_identity, rarity,
+           mana_cost, type_line, oracle_text, colors, color_identity, full_art, rarity,
            prices_usd, prices_usd_foil, prices_usd_etched, foil_only, cached_at)
         VALUES
           (@scryfall_id, @name, @set_code, @set_name, @collector_number, @image_uri, @image_back,
-           @mana_cost, @type_line, @oracle_text, @colors, @color_identity, @rarity,
+           @mana_cost, @type_line, @oracle_text, @colors, @color_identity, @full_art, @rarity,
            @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, datetime('now'))
       `).run(cardToRow(scryfall_card));
     }
@@ -509,11 +513,11 @@ app.post('/api/cards/copies', (req, res) => {
       db.prepare(`
         INSERT OR IGNORE INTO card_cache
           (scryfall_id, name, set_code, set_name, collector_number, image_uri, image_back,
-           mana_cost, type_line, oracle_text, colors, color_identity, rarity,
+           mana_cost, type_line, oracle_text, colors, color_identity, full_art, rarity,
            prices_usd, prices_usd_foil, prices_usd_etched, foil_only, cached_at)
         VALUES
           (@scryfall_id, @name, @set_code, @set_name, @collector_number, @image_uri, @image_back,
-           @mana_cost, @type_line, @oracle_text, @colors, @color_identity, @rarity,
+           @mana_cost, @type_line, @oracle_text, @colors, @color_identity, @full_art, @rarity,
            @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, datetime('now'))
       `).run(cardToRow(scryfall_card));
     }
@@ -877,6 +881,12 @@ app.get('/api/cache/status', (req, res) => {
   const meta  = db.prepare("SELECT value FROM bulk_meta WHERE key='bulk_updated_at'").get();
   const count = db.prepare('SELECT COUNT(*) AS n FROM card_cache').get();
   res.json({ last_updated: meta?.value ?? null, card_count: count.n });
+});
+
+app.post('/api/cache/refresh', (req, res) => {
+  db.prepare("DELETE FROM bulk_meta WHERE key='bulk_updated_at'").run();
+  res.json({ ok: true, message: 'Bulk cache cleared — refresh starting in background' });
+  refreshBulkCache();
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────

@@ -5,7 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MTG Collection</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Crimson+Pro:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Crimson+Pro:ital,wght@0,300;0,400;1,300&family=Philosopher:ital,wght@0,400;0,700;1,400&family=EB+Garamond:ital,wght@0,400;0,600;1,400&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Lora:ital,wght@0,400;0,600;1,400&family=Rajdhani:wght@400;600;700&family=Nunito:wght@300;400;600&family=MedievalSharp&family=Merriweather:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet">
+    <script>
+      (function() {
+        document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
+        var fd = localStorage.getItem('font-display');
+        var fb = localStorage.getItem('font-body');
+        if (fd) document.documentElement.style.setProperty('--font-display', fd);
+        if (fb) document.documentElement.style.setProperty('--font-body', fb);
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
