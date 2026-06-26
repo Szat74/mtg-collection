@@ -124,12 +124,122 @@ function LandRow({ land, decks, onUpdate, onDelete }) {
   );
 }
 
+function GalleryTile({ land, decks, onUpdate }) {
+  const [copies, setCopies] = useState(land.copies || []);
+  const [editingDecks, setEditingDecks] = useState(false);
+  useEffect(() => { setCopies(land.copies || []); }, [land]);
+
+  const increment = async (deckId) => {
+    const copy = copies.find(c => !c.deck_id);
+    if (!copy) return;
+    const res = await fetch(`${API}/cards/${copy.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deck_id: deckId }),
+    });
+    const updated = await res.json();
+    setCopies(copies.map(c => c.id === copy.id ? { ...c, deck_id: deckId } : c));
+    onUpdate([updated]);
+  };
+
+  const decrement = async (deckId) => {
+    const copy = copies.find(c => c.deck_id === deckId);
+    if (!copy) return;
+    const res = await fetch(`${API}/cards/${copy.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deck_id: null }),
+    });
+    const updated = await res.json();
+    setCopies(copies.map(c => c.id === copy.id ? { ...c, deck_id: null } : c));
+    onUpdate([updated]);
+  };
+
+  const deckCountMap = {};
+  let unassigned = 0;
+  for (const copy of copies) {
+    if (copy.deck_id) deckCountMap[copy.deck_id] = (deckCountMap[copy.deck_id] || 0) + 1;
+    else unassigned++;
+  }
+  const assignedDecks = decks.filter(d => deckCountMap[d.id]);
+
+  const gFoil = !!land.foil;
+  const gRawPrice = gFoil
+    ? (land.prices_usd_foil ?? land.prices_usd_etched ?? land.prices_usd)
+    : (land.prices_usd ?? land.prices_usd_foil ?? land.prices_usd_etched);
+  const gPrice = gRawPrice != null ? `$${parseFloat(gRawPrice).toFixed(2)}` : '—';
+
+  return (
+    <div className={`land-gallery-tile${gFoil ? ' foil' : ''}${land.full_art ? ' full-art' : ''}`}>
+      <div className="land-gallery-img-wrap">
+        {land.image_uri
+          ? <img src={land.image_uri} alt={land.name} loading="lazy" />
+          : <div className="land-gallery-placeholder">{land.name}</div>
+        }
+        {gFoil && <span className="foil-badge">✦ Foil</span>}
+        <span className="price-overlay">{gPrice}</span>
+        {decks.length > 0 && (
+          <button
+            className={`land-gallery-edit-btn${editingDecks ? ' active' : ''}`}
+            onClick={() => setEditingDecks(e => !e)}
+          >
+            {editingDecks ? 'Done' : 'Edit Decks'}
+          </button>
+        )}
+      </div>
+      <div className="land-gallery-info">
+        <span className="land-set-badge">
+          {land.set_code?.toUpperCase()}{land.collector_number ? ` #${land.collector_number}` : ''}
+        </span>
+        <span className="land-qty">×{land.quantity}</span>
+      </div>
+      {!editingDecks && (
+        <div className="land-gallery-deck-summary">
+          {assignedDecks.length > 0
+            ? assignedDecks.map(d => (
+                <span key={d.id} className="land-gallery-deck-chip">
+                  {d.name} ×{deckCountMap[d.id]}
+                </span>
+              ))
+            : unassigned > 0
+              ? <span className="land-gallery-deck-chip unassigned">Unassigned</span>
+              : null
+          }
+        </div>
+      )}
+      {editingDecks && (
+        <div className="land-gallery-decks">
+          {assignedDecks.map(deck => (
+            <div key={deck.id} className="land-gallery-deck-row">
+              <button className="btn-qty" onClick={() => decrement(deck.id)}>−</button>
+              <span className="land-gallery-deck-name">{deck.name}</span>
+              <span className="land-gallery-deck-count">{deckCountMap[deck.id]}</span>
+              <button className="btn-qty" onClick={() => increment(deck.id)} disabled={unassigned === 0}>+</button>
+            </div>
+          ))}
+          {unassigned > 0 && (
+            <select
+              className="land-deck-assign-select"
+              defaultValue=""
+              onChange={e => { if (e.target.value) { increment(parseInt(e.target.value, 10)); e.target.value = ''; } }}
+            >
+              <option value="">+ assign… ({unassigned} free)</option>
+              {decks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LandNameGroup({ groupKey, displayName, regular, fullArt, decks, onUpdate, onDelete }) {
   const [collapsed, setCollapsed] = useState(true);
-  const [galleryMode, setGalleryMode] = useState(false);
+  const [galleryMode, setGalleryMode] = useState(true);
 
-  const total = [...regular, ...fullArt].reduce((s, l) => s + l.quantity, 0);
-  const hasFullArt = fullArt.length > 0;
+  // Full-arts first in gallery, then regular
+  const galleryLands = [...fullArt, ...regular];
+  const total = galleryLands.reduce((s, l) => s + l.quantity, 0);
 
   return (
     <div className="land-name-group">
@@ -137,11 +247,11 @@ function LandNameGroup({ groupKey, displayName, regular, fullArt, decks, onUpdat
         <span className="land-name-toggle">{collapsed ? '▸' : '▾'}</span>
         <span className="land-name-label">{displayName}</span>
         <span className="land-name-total">×{total}</span>
-        {hasFullArt && !collapsed && (
+        {!collapsed && (
           <button
             className={`btn-sm land-gallery-btn ${galleryMode ? 'btn-save' : ''}`}
             onClick={e => { e.stopPropagation(); setGalleryMode(g => !g); }}
-            title="Toggle full-art gallery view"
+            title="Toggle gallery view"
           >
             {galleryMode ? '☰ List' : '⊞ Gallery'}
           </button>
@@ -149,55 +259,32 @@ function LandNameGroup({ groupKey, displayName, regular, fullArt, decks, onUpdat
       </div>
 
       {!collapsed && (
-        <>
-          {regular.length > 0 && (
-            <div className="land-art-group">
-              {hasFullArt && <div className="land-art-label">Regular</div>}
-              {regular.map(land => (
-                <LandRow key={land.ids[0]} land={land} decks={decks} onUpdate={onUpdate} onDelete={onDelete} />
-              ))}
-            </div>
-          )}
-
-          {hasFullArt && (
-            <div className="land-art-group">
-              <div className="land-art-label">Full Art</div>
-              {galleryMode ? (
-                <div className="land-gallery-grid">
-                  {fullArt.map(land => {
-                    const gFoil = !!land.foil;
-                    const gRawPrice = gFoil
-                      ? (land.prices_usd_foil ?? land.prices_usd_etched ?? land.prices_usd)
-                      : (land.prices_usd ?? land.prices_usd_foil ?? land.prices_usd_etched);
-                    const gPrice = gRawPrice != null ? `$${parseFloat(gRawPrice).toFixed(2)}` : '—';
-                    return (
-                      <div key={land.ids[0]} className={`land-gallery-tile${gFoil ? ' foil' : ''}`}>
-                        <div className="land-gallery-img-wrap">
-                          {land.image_uri
-                            ? <img src={land.image_uri} alt={land.name} loading="lazy" />
-                            : <div className="land-gallery-placeholder">{land.name}</div>
-                          }
-                          {gFoil && <span className="foil-badge">✦ Foil</span>}
-                          <span className="price-overlay">{gPrice}</span>
-                        </div>
-                        <div className="land-gallery-info">
-                          <span className="land-set-badge">
-                            {land.set_code?.toUpperCase()}{land.collector_number ? ` #${land.collector_number}` : ''}
-                          </span>
-                          <span className="land-qty">×{land.quantity}</span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                fullArt.map(land => (
+        galleryMode ? (
+          <div className="land-gallery-grid">
+            {galleryLands.map(land => (
+              <GalleryTile key={land.ids[0]} land={land} decks={decks} onUpdate={onUpdate} />
+            ))}
+          </div>
+        ) : (
+          <>
+            {regular.length > 0 && (
+              <div className="land-art-group">
+                {fullArt.length > 0 && <div className="land-art-label">Regular</div>}
+                {regular.map(land => (
                   <LandRow key={land.ids[0]} land={land} decks={decks} onUpdate={onUpdate} onDelete={onDelete} />
-                ))
-              )}
-            </div>
-          )}
-        </>
+                ))}
+              </div>
+            )}
+            {fullArt.length > 0 && (
+              <div className="land-art-group">
+                <div className="land-art-label">Full Art</div>
+                {fullArt.map(land => (
+                  <LandRow key={land.ids[0]} land={land} decks={decks} onUpdate={onUpdate} onDelete={onDelete} />
+                ))}
+              </div>
+            )}
+          </>
+        )
       )}
     </div>
   );
@@ -480,7 +567,7 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, onGroupC
                     const q = groupSearch.trim();
                     const match = (groups || []).find(g => g.name.toLowerCase() === q.toLowerCase());
                     if (match) { toggleGroup(match.id); setGroupSearch(''); }
-                    else if (q) { setNewGroupName(q); createGroupByName(q); }
+                    else if (q) { createGroupByName(q); }
                   }
                   if (e.key === 'Escape') setGroupSearch('');
                 }}
@@ -519,15 +606,25 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, onGroupC
 
 // ── Collection view ───────────────────────────────────────────────────────────
 // decks: [{id, name, ...}], groups: [{id, name}]
-export default function CollectionView({ cards: initialCards, decks, groups, onGroupCreated, fetchCards, refresh, showToast }) {
+export default function CollectionView({ cards: initialCards, decks, groups, onGroupCreated, refresh, showToast }) {
   const [cards, setCards]               = useState(initialCards);
   const [search, setSearch]             = useState('');
   const [filterDeck, setFilterDeck]     = useState('');   // deck id (string of int) or ''
   const [filterGroup, setFilterGroup]   = useState('');   // group id (string of int) or ''
   const [filterFoil, setFilterFoil]     = useState('');
   const [filterColors, setFilterColors] = useState(new Set());
-  const [sort, setSort]                 = useState('name');
-  const [order, setOrder]               = useState('asc');
+  const [sort, setSort]                 = useState('prices_usd');
+  const [order, setOrder]               = useState('desc');
+  const [filtersOpen, setFiltersOpen]   = useState(false);
+
+  const hasFilters = !!(filterDeck || filterGroup || filterFoil || filterColors.size > 0);
+  const clearAllFilters = () => { setFilterDeck(''); setFilterGroup(''); setFilterFoil(''); setFilterColors(new Set()); };
+  const activeFilterCount = [filterDeck, filterGroup, filterFoil].filter(Boolean).length + (filterColors.size > 0 ? 1 : 0);
+  const SORT_LABELS = { name: 'Name', prices_usd: 'Price', rarity: 'Rarity', set_name: 'Set', added_at: 'Added' };
+  const cycleSort = (field) => {
+    if (sort === field) setOrder(o => o === 'asc' ? 'desc' : 'asc');
+    else { setSort(field); setOrder('asc'); }
+  };
 
   // Bulk-edit state
   const [bulkMode, setBulkMode]           = useState(false);
@@ -536,18 +633,20 @@ export default function CollectionView({ cards: initialCards, decks, groups, onG
   const [bulkGroup, setBulkGroup]         = useState('');   // group id or ''
   const [bulkBusy, setBulkBusy]           = useState(false);
 
-  useEffect(() => { setCards(initialCards); }, [initialCards]);
-
   const applyFilters = async () => {
     const params = {};
     if (search)                params.search = search;
-    if (filterDeck)            params.deck   = filterDeck;   // already an id
-    if (filterGroup)           params.group  = filterGroup;  // already an id
+    if (filterDeck)            params.deck   = filterDeck;
+    if (filterGroup)           params.group  = filterGroup;
     if (filterFoil !== '')     params.foil   = filterFoil;
     if (filterColors.size > 0) params.colors = [...filterColors].join(',');
     params.sort  = sort;
     params.order = order;
-    await fetchCards(params);
+    try {
+      const qs  = new URLSearchParams(params).toString();
+      const res = await fetch(`${API}/cards${qs ? '?' + qs : ''}`);
+      if (res.ok) setCards(await res.json());
+    } catch {}
   };
 
   useEffect(() => { applyFilters(); }, [search, filterDeck, filterGroup, filterFoil, filterColors, sort, order]);
@@ -706,65 +805,79 @@ export default function CollectionView({ cards: initialCards, decks, groups, onG
   return (
     <div className="collection-view">
       <div className="filter-bar">
-        <input
-          className="filter-input"
-          placeholder="Search by name…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
-        <select value={filterDeck} onChange={e => setFilterDeck(e.target.value)}>
-          <option value="">All Decks</option>
-          {decks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-        </select>
-        <select value={filterGroup} onChange={e => setFilterGroup(e.target.value)}>
-          <option value="">All Groups</option>
-          {(groups || []).map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-        </select>
-        <select value={filterFoil} onChange={e => setFilterFoil(e.target.value)}>
-          <option value="">Foil + Non-foil</option>
-          <option value="true">Foil only</option>
-          <option value="false">Non-foil only</option>
-        </select>
-        <div className="color-filter">
-          {[
-            { code: 'W', label: 'White', bg: '#f9faf4', color: '#6b6340' },
-            { code: 'U', label: 'Blue',  bg: '#0e68ab', color: '#fff'    },
-            { code: 'B', label: 'Black', bg: '#2a2a2a', color: '#ccc'    },
-            { code: 'R', label: 'Red',   bg: '#d3202a', color: '#fff'    },
-            { code: 'G', label: 'Green', bg: '#00733e', color: '#fff'    },
-          ].map(({ code, label, bg, color }) => (
-            <button
-              key={code}
-              title={label}
-              className={`color-pip ${filterColors.has(code) ? 'active' : ''}`}
-              style={{ '--pip-bg': bg, '--pip-color': color }}
-              onClick={() => setFilterColors(prev => {
-                const next = new Set(prev);
-                next.has(code) ? next.delete(code) : next.add(code);
-                return next;
-              })}
-            >
-              {code}
-            </button>
-          ))}
+        <div className="filter-row-main">
+          <input
+            className="filter-input"
+            placeholder="Search by name…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          <button
+            className={`btn-sm filter-toggle-btn${filtersOpen ? ' btn-save' : ''}${hasFilters ? ' filter-has-active' : ''}`}
+            onClick={() => setFiltersOpen(o => !o)}
+            title="Toggle filters"
+          >
+            {hasFilters ? `Filters (${activeFilterCount})` : 'Filters'}
+          </button>
+          <span className="card-count">{cards.reduce((s, c) => s + c.quantity, 0)} cards</span>
         </div>
-        <select value={sort} onChange={e => setSort(e.target.value)}>
-          <option value="name">Sort: Name</option>
-          <option value="prices_usd">Sort: Price</option>
-          <option value="rarity">Sort: Rarity</option>
-          <option value="set_name">Sort: Set</option>
-          <option value="added_at">Sort: Added</option>
-        </select>
-        <button className="btn-sm" onClick={() => setOrder(o => o === 'asc' ? 'desc' : 'asc')}>
-          {order === 'asc' ? '↑' : '↓'}
-        </button>
-        <button
-          className={`btn-sm ${bulkMode ? 'btn-save' : ''}`}
-          onClick={() => bulkMode ? exitBulk() : setBulkMode(true)}
-        >
-          {bulkMode ? 'Cancel' : '☑ Bulk Edit'}
-        </button>
-        <span className="card-count">{cards.reduce((s, c) => s + c.quantity, 0)} cards</span>
+
+        <div className={`filter-controls${filtersOpen ? ' filter-controls-open' : ''}`}>
+          <select className={filterDeck ? 'filter-active' : ''} value={filterDeck} onChange={e => setFilterDeck(e.target.value)}>
+            <option value="">All Decks</option>
+            {decks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+          <select className={filterGroup ? 'filter-active' : ''} value={filterGroup} onChange={e => setFilterGroup(e.target.value)}>
+            <option value="">All Groups</option>
+            {(groups || []).map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+          </select>
+          <select className={filterFoil ? 'filter-active' : ''} value={filterFoil} onChange={e => setFilterFoil(e.target.value)}>
+            <option value="">All Finishes</option>
+            <option value="true">Foil only</option>
+            <option value="false">Non-foil only</option>
+          </select>
+          <div className="color-filter">
+            {[
+              { code: 'W', label: 'White', bg: '#f9faf4', color: '#6b6340' },
+              { code: 'U', label: 'Blue',  bg: '#0e68ab', color: '#fff'    },
+              { code: 'B', label: 'Black', bg: '#2a2a2a', color: '#ccc'    },
+              { code: 'R', label: 'Red',   bg: '#d3202a', color: '#fff'    },
+              { code: 'G', label: 'Green', bg: '#00733e', color: '#fff'    },
+            ].map(({ code, label, bg, color }) => (
+              <button
+                key={code}
+                title={label}
+                className={`color-pip ${filterColors.has(code) ? 'active' : ''}`}
+                style={{ '--pip-bg': bg, '--pip-color': color }}
+                onClick={() => setFilterColors(prev => {
+                  const next = new Set(prev);
+                  next.has(code) ? next.delete(code) : next.add(code);
+                  return next;
+                })}
+              >{code}</button>
+            ))}
+          </div>
+          <div className="sort-group">
+            {Object.entries(SORT_LABELS).map(([field, label]) => (
+              <button
+                key={field}
+                className={`sort-btn${sort === field ? ' sort-btn-active' : ''}`}
+                onClick={() => cycleSort(field)}
+              >
+                {label}{sort === field ? (order === 'asc' ? ' ↑' : ' ↓') : ''}
+              </button>
+            ))}
+          </div>
+          {hasFilters && (
+            <button className="btn-sm filter-clear-btn" onClick={clearAllFilters}>✕ Clear</button>
+          )}
+          <button
+            className={`btn-sm ${bulkMode ? 'btn-save' : ''}`}
+            onClick={() => bulkMode ? exitBulk() : setBulkMode(true)}
+          >
+            {bulkMode ? 'Cancel' : '☑ Bulk'}
+          </button>
+        </div>
       </div>
 
       {bulkMode && (

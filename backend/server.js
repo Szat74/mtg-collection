@@ -306,7 +306,7 @@ const saveGroups = db.transaction((collectionId, groupIds) => {
 function groupRows(rows) {
   const map = new Map();
   for (const row of rows) {
-    const key = `${row.scryfall_id || ''}||${row.name}||${row.foil}`;
+    const key = `${row.scryfall_id || `unmatched-${row.id}`}||${row.name}||${row.foil}`;
     if (!map.has(key)) {
       map.set(key, { ...row, quantity: 0, ids: [], copies: [] });
     }
@@ -395,7 +395,13 @@ app.get('/api/scryfall/card/:set/:num', async (req, res) => {
 app.get('/api/cards', (req, res) => {
   const { search, deck, group, foil, colors, unmatched, sort = 'name', order = 'asc' } = req.query;
 
-  const sortMap = { name: 'c.name', added_at: 'c.added_at', set_name: 'cc.set_name', prices_usd: 'cc.prices_usd' };
+  const sortMap = {
+    name:       'c.name',
+    added_at:   'c.added_at',
+    set_name:   'cc.set_name',
+    prices_usd: 'CAST(COALESCE(cc.prices_usd_foil, cc.prices_usd, cc.prices_usd_etched) AS REAL)',
+    rarity:     "CASE cc.rarity WHEN 'common' THEN 1 WHEN 'uncommon' THEN 2 WHEN 'rare' THEN 3 WHEN 'mythic' THEN 4 ELSE 5 END",
+  };
   const col = sortMap[sort] || 'c.name';
   const dir = order === 'desc' ? 'DESC' : 'ASC';
 

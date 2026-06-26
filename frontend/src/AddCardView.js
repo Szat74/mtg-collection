@@ -178,7 +178,6 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
             placeholder="Card name  or  SET #number (e.g. MH3 42)"
             value={query}
             onChange={handleQueryChange}
-            autoFocus
           />
           {loadingSearch && <div className="searching">Searching…</div>}
           {results.length > 0 && (

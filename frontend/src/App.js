@@ -98,7 +98,7 @@ export default function App() {
           <CollectionView
             cards={cards} decks={decks} groups={groups}
             onGroupCreated={g => setGroups(prev => [...prev, g].sort((a, b) => a.name.localeCompare(b.name)))}
-            fetchCards={fetchCards} refresh={refresh} showToast={showToast}
+            refresh={refresh} showToast={showToast}
           />
         )}
         {view === 'decks' && (
