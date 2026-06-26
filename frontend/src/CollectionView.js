@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 
 const API = '/api';
 const RARITY_COLOR = { common: '#c0c0c0', uncommon: '#a8c4d4', rare: '#d4af37', mythic: '#e85c2e', special: '#c879ff' };
@@ -612,14 +612,23 @@ export default function CollectionView({ cards: initialCards, decks, groups, onG
   const [filterDeck, setFilterDeck]     = useState('');   // deck id (string of int) or ''
   const [filterGroup, setFilterGroup]   = useState('');   // group id (string of int) or ''
   const [filterFoil, setFilterFoil]     = useState('');
+  const [filterSet, setFilterSet]       = useState('');
   const [filterColors, setFilterColors] = useState(new Set());
+
+  const allSets = useMemo(() => {
+    const seen = new Map();
+    for (const c of initialCards) {
+      if (c.set_code && !seen.has(c.set_code)) seen.set(c.set_code, c.set_name || c.set_code);
+    }
+    return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [initialCards]);
   const [sort, setSort]                 = useState('prices_usd');
   const [order, setOrder]               = useState('desc');
   const [filtersOpen, setFiltersOpen]   = useState(false);
 
-  const hasFilters = !!(filterDeck || filterGroup || filterFoil || filterColors.size > 0);
-  const clearAllFilters = () => { setFilterDeck(''); setFilterGroup(''); setFilterFoil(''); setFilterColors(new Set()); };
-  const activeFilterCount = [filterDeck, filterGroup, filterFoil].filter(Boolean).length + (filterColors.size > 0 ? 1 : 0);
+  const hasFilters = !!(filterDeck || filterGroup || filterFoil || filterSet || filterColors.size > 0);
+  const clearAllFilters = () => { setFilterDeck(''); setFilterGroup(''); setFilterFoil(''); setFilterSet(''); setFilterColors(new Set()); };
+  const activeFilterCount = [filterDeck, filterGroup, filterFoil, filterSet].filter(Boolean).length + (filterColors.size > 0 ? 1 : 0);
   const SORT_LABELS = { name: 'Name', prices_usd: 'Price', rarity: 'Rarity', set_name: 'Set', added_at: 'Added' };
   const cycleSort = (field) => {
     if (sort === field) setOrder(o => o === 'asc' ? 'desc' : 'asc');
@@ -639,6 +648,7 @@ export default function CollectionView({ cards: initialCards, decks, groups, onG
     if (filterDeck)            params.deck   = filterDeck;
     if (filterGroup)           params.group  = filterGroup;
     if (filterFoil !== '')     params.foil   = filterFoil;
+    if (filterSet)             params.set    = filterSet;
     if (filterColors.size > 0) params.colors = [...filterColors].join(',');
     params.sort  = sort;
     params.order = order;
@@ -649,7 +659,7 @@ export default function CollectionView({ cards: initialCards, decks, groups, onG
     } catch {}
   };
 
-  useEffect(() => { applyFilters(); }, [search, filterDeck, filterGroup, filterFoil, filterColors, sort, order]);
+  useEffect(() => { applyFilters(); }, [search, filterDeck, filterGroup, filterFoil, filterSet, filterColors, sort, order]);
 
   // updatedRows are full collection rows returned by PATCH (with groups: [{id,name}], deck_id)
   const handleUpdate = (updatedRows) => {
@@ -835,6 +845,10 @@ export default function CollectionView({ cards: initialCards, decks, groups, onG
             <option value="">All Finishes</option>
             <option value="true">Foil only</option>
             <option value="false">Non-foil only</option>
+          </select>
+          <select className={filterSet ? 'filter-active' : ''} value={filterSet} onChange={e => setFilterSet(e.target.value)}>
+            <option value="">All Sets</option>
+            {allSets.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
           </select>
           <div className="color-filter">
             {[

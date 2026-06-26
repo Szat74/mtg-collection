@@ -11,6 +11,13 @@ const API = '/api';
 
 export default function App() {
   const [view, setView]   = useState('collection');
+  const [showScrollTop, setShowScrollTop] = useState(false);
+
+  useEffect(() => {
+    const onScroll = () => setShowScrollTop(window.scrollY > 300);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
   const [cards, setCards] = useState([]);
   const [stats, setStats] = useState(null);
   const [decks, setDecks] = useState([]);
@@ -121,6 +128,15 @@ export default function App() {
         )}
       </main>
       {toast && <div className={`toast toast-${toast.type}`}>{toast.msg}</div>}
+      {showScrollTop && (
+        <button
+          className="scroll-top-btn"
+          onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+          aria-label="Back to top"
+        >
+          ↑
+        </button>
+      )}
     </div>
   );
 }

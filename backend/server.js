@@ -393,7 +393,7 @@ app.get('/api/scryfall/card/:set/:num', async (req, res) => {
 
 // ── Collection — list (grouped) ───────────────────────────────────────────────
 app.get('/api/cards', (req, res) => {
-  const { search, deck, group, foil, colors, unmatched, sort = 'name', order = 'asc' } = req.query;
+  const { search, deck, group, foil, colors, set, unmatched, sort = 'name', order = 'asc' } = req.query;
 
   const sortMap = {
     name:       'c.name',
@@ -433,6 +433,10 @@ app.get('/api/cards', (req, res) => {
   if (foil !== undefined && foil !== '') {
     sql += ' AND c.foil = ?';
     params.push(foil === 'true' ? 1 : 0);
+  }
+  if (set) {
+    sql += ' AND cc.set_code = ?';
+    params.push(set);
   }
   if (colors) {
     const selected = colors.split(',').map(c => c.trim().toUpperCase()).filter(Boolean);
