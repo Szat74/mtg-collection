@@ -1,6 +1,6 @@
 # 🃏 Arcane Index — MTG Collection Manager
 
-A self-hosted app for digitizing your Magic: The Gathering card library. Search cards via the Scryfall API, track quantities, foils, and deck assignments, and browse your collection with full card art.
+A self-hosted app for digitizing your Magic: The Gathering card library. Search cards via the Scryfall API, track every physical copy, assign cards to decks and binders, and browse your collection with full card art.
 
 ![Docker](https://img.shields.io/badge/docker-ready-blue) ![Scryfall](https://img.shields.io/badge/powered%20by-Scryfall-orange)
 
@@ -8,14 +8,62 @@ A self-hosted app for digitizing your Magic: The Gathering card library. Search 
 
 ## Features
 
-- 🔍 **Search** any card by name with live Scryfall lookup, or by set code + collector number
-- 📋 **Bulk import** — paste a decklist and import dozens of cards at once
-- ✨ **Foil tracking** — mark individual copies as foil
-- 🗂️ **Deck assignment** — tag cards to named decks and filter by them
-- 🖼️ **Card art** — full Scryfall images, with flip support for double-faced cards
-- 📊 **Stats dashboard** — totals, rarity breakdown, deck breakdown
+### Collection
+- 🔍 **Search by name** with live Scryfall autocomplete, or jump straight to a printing using **set code + collector number** (e.g. `MH3 42`)
+- ✨ **Foil tracking** — each physical copy is tracked individually and can be marked foil
+- 🖼️ **Gallery & list views** — browse as card art tiles or a compact list; filter by name, set, foil, group, or deck/binder
+- 🏷️ **Tags / groups** — create freeform tags and assign cards to multiple groups
 - 💾 **CSV export** — download your full collection any time
-- 🔒 **Fully self-hosted** — your data stays on your machine
+
+### Decks
+- 🗂️ **Deck management** — create named decks with optional format (Standard, Modern, Commander, etc.)
+- ⚔️ **Commander support** — assign a commander and optional partner; color identity filtering applied automatically
+- 🔎 **Format validation** — singleton rule, color identity, 4-copy limit, and rarity checks with a violations banner
+- ⊞ **Grid view** — browse deck contents as card art, grouped and sorted
+- ≡ **List view** — compact name-only list with color identity pips; click a card name to expand its art inline
+- 🗂️ **Grouping** — group cards by type (Creature, Instant, Land…) or color in both grid and list views; groups are collapsible
+- 🔤 **Sorting** — secondary sort by name or converted mana cost within any group
+
+### Binders
+- 📒 **Binder tracking** — separate location type for binders; same one-card-one-location rule as decks, no format restrictions
+- Full CRUD — create, rename, and delete binders independently from decks
+
+### Bulk Import
+- 📋 **Paste a decklist** and import dozens of cards at once
+- Supports standard decklist formats plus name-less **set + collector number** lines
+- Assign a default location for the whole import, or route individual lines to different decks with `| Deck Name`
+
+### Stats
+- 📊 **Dashboard** — total cards, unique printings, foil count, collection value
+- Rarity breakdown, per-deck breakdown, and per-binder breakdown with value bars
+
+---
+
+## Bulk Import Format
+
+One card per line. Supported syntax:
+
+```
+Lightning Bolt
+4 Counterspell
+2 foil Thoughtseize
+3 Llanowar Elves | Elf Tribal
+1 foil Black Lotus (LEA) 232
+MH3 42
+2 foil ONE 115
+```
+
+| Format | Effect |
+|---|---|
+| `Card Name` | Add 1 copy |
+| `4 Card Name` | Add 4 copies |
+| `foil Card Name` | Mark as foil |
+| `Card Name (SET) ###` | Pin to a specific printing |
+| `Card Name \| Location` | Assign to a deck or binder |
+| `SET ###` | Add by set code + collector number (no name needed) |
+| `2 foil SET ###` | Foil copy by set + number |
+
+Card names use fuzzy matching — `"lightning bolt"` works fine.
 
 ---
 
@@ -25,13 +73,11 @@ No build step required. Pre-built images are hosted on GitHub Container Registry
 
 ### 1. Create a data directory
 
-This is where your card database will be stored persistently.
-
 ```bash
 sudo mkdir -p /srv/mtg-collection/data
 ```
 
-> You can use any path you like — just update the volume in the compose file to match.
+> You can use any path — just update the volume in the compose file to match.
 
 ### 2. Create your `docker-compose.yml`
 
@@ -110,28 +156,6 @@ Or use [Watchtower](https://containrrr.dev/watchtower/) to handle updates automa
 
 ---
 
-## Bulk Import Format
-
-One card per line. Supported syntax:
-
-```
-Lightning Bolt
-4 Counterspell
-2 foil Thoughtseize
-3 Llanowar Elves | Elf Tribal
-1 foil Black Lotus | Power Vault
-```
-
-| Prefix/Suffix | Effect |
-|---|---|
-| `4 Card Name` | Set quantity to 4 |
-| `foil Card Name` | Mark as foil |
-| `Card Name \| Deck Name` | Assign to a deck |
-
-Card names use fuzzy matching — `"lightning bolt"` works fine.
-
----
-
 ## Backup & Restore
 
 Your entire collection is a single SQLite file.
@@ -184,8 +208,9 @@ The backend exposes a REST API if you want to script against your collection.
 | PATCH | `/api/cards/:id` | Update quantity, foil status, or deck |
 | DELETE | `/api/cards/:id` | Remove a card |
 | GET | `/api/stats` | Collection statistics |
-| GET | `/api/decks` | List all deck names |
-| POST | `/api/import` | Bulk import (`{ text, deck }`) |
+| GET | `/api/decks` | List all decks and binders |
+| POST | `/api/decks` | Create a deck or binder (`{ name, type: 'deck'|'binder', format? }`) |
+| POST | `/api/import` | Bulk import (`{ text, deck_id? }`) |
 | GET | `/api/export/csv` | Download full collection as CSV |
 | GET | `/api/scryfall/search?q=` | Proxy to Scryfall card search |
 | GET | `/api/scryfall/card/:set/:num` | Lookup card by set code + collector number |
