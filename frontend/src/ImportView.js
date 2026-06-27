@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import LocationSelect from './LocationSelect';
 
 const API = '/api';
 
@@ -6,7 +7,9 @@ const EXAMPLE = `4 Lightning Bolt
 2 foil Black Lotus
 1 Counterspell | Control Deck
 3 Llanowar Elves (LEA) 184
-2 foil Thoughtseize (LRW) 145 | Midrange`;
+2 foil Thoughtseize (LRW) 145 | Midrange
+MH3 42
+2 foil ONE 115`;
 
 export default function ImportView({ decks, refresh, showToast, setView }) {
   const [text, setText] = useState('');
@@ -58,7 +61,9 @@ export default function ImportView({ decks, refresh, showToast, setView }) {
         <code>4 Card Name</code> &nbsp;|&nbsp;
         <code>2 foil Card Name</code> &nbsp;|&nbsp;
         <code>1 Card Name (SET) 000</code> &nbsp;|&nbsp;
-        <code>1 Card Name | Deck Name</code>
+        <code>1 Card Name | Deck Name</code><br />
+        <code>SET 000</code> &nbsp;|&nbsp;
+        <code>2 foil SET 000</code> &nbsp;— set + collector # only, no name needed
       </p>
 
       <div className="import-body">
@@ -71,13 +76,14 @@ export default function ImportView({ decks, refresh, showToast, setView }) {
             rows={16}
           />
           <div className="import-opts">
-            <label>Default Deck (optional)
-              <select value={defaultDeck} onChange={e => setDefaultDeck(e.target.value)}>
-                <option value="">— none —</option>
-                {decks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                <option value="__new__">+ New deck…</option>
-              </select>
-            </label>
+            <label>Default Location (optional)</label>
+            <LocationSelect
+              decks={decks}
+              value={defaultDeck}
+              onChange={setDefaultDeck}
+              placeholder="— none —"
+              extraOptions={[{ value: '__new__', label: '+ New location…', isAction: true }]}
+            />
             {defaultDeck === '__new__' && (
               <input placeholder="Deck name" value={newDeck} onChange={e => setNewDeck(e.target.value)} />
             )}

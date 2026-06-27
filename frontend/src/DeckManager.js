@@ -281,7 +281,7 @@ export function DeckManager({ onDecksChanged }) {
     try {
       const res  = await fetch(`${API}/decks`);
       const data = await res.json();
-      setDecks(data); // [{id, name, colors, format, description, cardCount, commander_id}]
+      setDecks(data.filter(d => d.type !== 'binder')); // [{id, name, colors, format, description, cardCount, commander_id}]
     } catch {
       setDecks([]);
     } finally {

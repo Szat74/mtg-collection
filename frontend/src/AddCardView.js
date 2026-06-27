@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import LocationSelect from './LocationSelect';
 
 const API = '/api';
 
@@ -236,23 +237,20 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
               </label>
             </div>
 
-            <label>Deck</label>
-            <select
-              value={selDeckId}
-              onChange={e => setSelDeckId(e.target.value)}
-            >
-              <option value="">— No deck —</option>
-              {decks.filter(d => {
+            <label>Location</label>
+            <LocationSelect
+              decks={decks.filter(d => {
                 if (d.format !== 'commander' || !d.commander_id || !d.colors?.length) return true;
                 const cardIdentity = selectedCard?.color_identity || [];
                 if (!cardIdentity.length) return true;
                 return cardIdentity.every(c => d.colors.includes(c));
-              }).map(d => (
-                <option key={d.id} value={d.id}>
-                  {d.name}{d.format === 'commander' && !d.commander_id ? ' ⚠ no commander' : ''}
-                </option>
-              ))}
-            </select>
+              }).map(d => ({
+                ...d,
+                name: d.format === 'commander' && !d.commander_id ? `${d.name} ⚠` : d.name,
+              }))}
+              value={selDeckId}
+              onChange={setSelDeckId}
+            />
 
             <label>Groups</label>
             {selGroupIds.size > 0 && (

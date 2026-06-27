@@ -114,7 +114,7 @@ function LandRow({ land, decks, onUpdate, onDelete }) {
                 onChange={e => { if (e.target.value) { increment(parseInt(e.target.value, 10)); e.target.value = ''; } }}
               >
                 <option value="">+ assign to deck…</option>
-                {decks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                {decks.map(d => <option key={d.id} value={d.id}>{d.type === 'binder' ? `📒 ${d.name}` : d.name}</option>)}
               </select>
             )}
           </div>
@@ -224,7 +224,7 @@ function GalleryTile({ land, decks, onUpdate }) {
               onChange={e => { if (e.target.value) { increment(parseInt(e.target.value, 10)); e.target.value = ''; } }}
             >
               <option value="">+ assign… ({unassigned} free)</option>
-              {decks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              {decks.map(d => <option key={d.id} value={d.id}>{d.type === 'binder' ? `📒 ${d.name}` : d.name}</option>)}
             </select>
           )}
         </div>
@@ -363,7 +363,7 @@ function CopyRow({ copy, index, decks, cardColorIdentity, onChange }) {
         <option value="">— unassigned —</option>
         {eligibleDecks.map(d => (
           <option key={d.id} value={d.id}>
-            {d.name}{d.format === 'commander' && !d.commander_id ? ' ⚠ no commander' : ''}
+            {d.type === 'binder' ? `📒 ${d.name}` : d.name}{d.format === 'commander' && !d.commander_id ? ' ⚠ no commander' : ''}
           </option>
         ))}
       </select>
@@ -453,13 +453,14 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, onGroupC
     : (card.prices_usd ?? card.prices_usd_foil ?? card.prices_usd_etched);
   const price = rawPrice ? `$${parseFloat(rawPrice).toFixed(2)}` : null;
 
-  // Summarise deck assignments for badge display: deck name → count
+  // Summarise deck assignments for badge display: deck name → { count, isBinder }
   const deckCounts = {};
   for (const copy of (card.copies || [])) {
     if (copy.deck_id) {
       const deck = decks.find(d => d.id === copy.deck_id);
       const label = deck?.name ?? `#${copy.deck_id}`;
-      deckCounts[label] = (deckCounts[label] || 0) + 1;
+      if (!deckCounts[label]) deckCounts[label] = { count: 0, isBinder: deck?.type === 'binder' };
+      deckCounts[label].count++;
     }
   }
 
@@ -497,9 +498,9 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, onGroupC
         {/* Deck badges */}
         {Object.keys(deckCounts).length > 0 && (
           <div className="card-badges">
-            {Object.entries(deckCounts).map(([name, n]) => (
-              <span key={name} className="card-deck-badge">
-                {name}{n > 1 ? ` ×${n}` : ''}
+            {Object.entries(deckCounts).map(([name, { count, isBinder }]) => (
+              <span key={name} className={isBinder ? 'card-deck-badge card-binder-badge' : 'card-deck-badge'}>
+                {isBinder ? '📒 ' : ''}{name}{count > 1 ? ` ×${count}` : ''}
               </span>
             ))}
           </div>

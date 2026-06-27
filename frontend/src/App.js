@@ -6,6 +6,7 @@ import ImportView from './ImportView';
 import StatsView from './StatsView';
 import SettingsView from './SettingsView';
 import DeckView from './DeckView';
+import BinderView from './BinderView';
 
 const API = '/api';
 
@@ -83,6 +84,7 @@ export default function App() {
             {[
               { id: 'collection', label: 'Collection' },
               { id: 'decks',      label: 'Decks' },
+              { id: 'binders',    label: 'Binders' },
               { id: 'add',        label: 'Add Card' },
               { id: 'import',     label: 'Bulk Import' },
               { id: 'stats',      label: 'Stats' },
@@ -109,7 +111,10 @@ export default function App() {
           />
         )}
         {view === 'decks' && (
-          <DeckView decks={decks} refresh={refresh} showToast={showToast} />
+          <DeckView decks={decks.filter(d => d.type !== 'binder')} refresh={refresh} showToast={showToast} />
+        )}
+        {view === 'binders' && (
+          <BinderView binders={decks.filter(d => d.type === 'binder')} refresh={refresh} showToast={showToast} />
         )}
         {view === 'add' && (
           <AddCardView

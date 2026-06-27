@@ -89,6 +89,7 @@ try { db.exec('ALTER TABLE card_cache ADD COLUMN color_identity TEXT'); } catch 
 try { db.exec('ALTER TABLE card_cache ADD COLUMN full_art INTEGER DEFAULT 0'); } catch {}
 try { db.exec('ALTER TABLE card_cache ADD COLUMN keywords TEXT'); } catch {}
 try { db.exec('ALTER TABLE decks ADD COLUMN partner_id INTEGER REFERENCES collection(id) ON DELETE SET NULL'); } catch {}
+try { db.exec("ALTER TABLE decks ADD COLUMN type TEXT NOT NULL DEFAULT 'deck'"); } catch {}
 
 // ─── Fetch helper ─────────────────────────────────────────────────────────────
 async function scryFetch(url, options = {}) {
@@ -622,7 +623,7 @@ app.get('/api/stats', (req, res) => {
   `).all();
 
   const byDeck = db.prepare(`
-    SELECT d.id, d.name AS deck, COUNT(*) AS n,
+    SELECT d.id, d.name AS deck, COALESCE(d.type, 'deck') AS type, COUNT(*) AS n,
       SUM(CASE WHEN c.foil = 1
             THEN COALESCE(cc.prices_usd_foil, cc.prices_usd_etched, cc.prices_usd, 0)
             ELSE COALESCE(cc.prices_usd, 0)
@@ -686,6 +687,7 @@ app.get('/api/decks', (req, res) => {
     return {
       id:               deck.id,
       name:             deck.name,
+      type:             deck.type ?? 'deck',
       colors:           derivedColors,
       description:      deck.description,
       format:           deck.format,
@@ -704,17 +706,19 @@ app.get('/api/decks', (req, res) => {
 });
 
 app.post('/api/decks', (req, res) => {
-  const { name, colors, description, format } = req.body;
+  const { name, colors, description, format, type } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: 'name is required' });
+  const deckType = type === 'binder' ? 'binder' : 'deck';
   try {
     // Insert with commander_id=NULL; caller can PATCH to set it afterward
     const result = db.prepare(
-      'INSERT INTO decks (name, colors, description, format, commander_id) VALUES (?, ?, ?, ?, NULL)'
-    ).run(name.trim(), colors ? JSON.stringify(colors) : null, description ?? null, format ?? null);
+      'INSERT INTO decks (name, colors, description, format, commander_id, type) VALUES (?, ?, ?, ?, NULL, ?)'
+    ).run(name.trim(), colors ? JSON.stringify(colors) : null, description ?? null, deckType === 'binder' ? null : (format ?? null), deckType);
 
     res.status(201).json({
       id: result.lastInsertRowid, name: name.trim(),
-      colors: colors ?? [], description: description ?? null, format: format ?? null,
+      type: deckType,
+      colors: colors ?? [], description: description ?? null, format: deckType === 'binder' ? null : (format ?? null),
       commander_id: null, cardCount: 0,
     });
   } catch {
@@ -876,7 +880,9 @@ app.get('/api/decks/:id/cards', (req, res) => {
     const violations = [];
     const nameKey = card.name.toLowerCase();
 
-    if (format === 'commander') {
+    if (deck.type === 'binder') {
+      // Binders have no format rules
+    } else if (format === 'commander') {
       if (!isBasic(card) && nameCounts[nameKey] > 1) {
         violations.push({ type: 'singleton', message: 'More than 1 copy (Commander singleton rule)' });
       }
@@ -949,7 +955,38 @@ app.delete('/api/groups/:id', (req, res) => {
 });
 
 // ── Bulk import ───────────────────────────────────────────────────────────────
-app.post('/api/import', (req, res) => {
+// Regex for name-less set+collector# lines: e.g. "MH3 42", "2 foil ONE 115", "2 foil ONE #115"
+const SET_NUM_ONLY_RE = /^(\d+\s+)?(foil\s+)?([A-Za-z0-9]{2,6})\s+#?(\d+[a-zA-Z]?)$/i;
+
+async function resolveSetNum(setCode, collectorNumber) {
+  // Check local cache first
+  let cached = db.prepare(
+    'SELECT * FROM card_cache WHERE lower(set_code) = lower(?) AND collector_number = ? LIMIT 1'
+  ).get(setCode, collectorNumber);
+  if (cached) return cached;
+
+  // Fall back to Scryfall
+  const r = await scryFetch(`https://api.scryfall.com/cards/${encodeURIComponent(setCode.toLowerCase())}/${encodeURIComponent(collectorNumber)}`);
+  if (!r.ok) throw new Error(`Card ${setCode} #${collectorNumber} not found`);
+  const card = await r.json();
+  if (card.object === 'error') throw new Error(card.details || `Card ${setCode} #${collectorNumber} not found`);
+
+  // Cache it
+  db.prepare(`
+    INSERT OR IGNORE INTO card_cache
+      (scryfall_id, name, set_code, set_name, collector_number, image_uri, image_back,
+       mana_cost, type_line, oracle_text, colors, color_identity, full_art, rarity,
+       prices_usd, prices_usd_foil, prices_usd_etched, foil_only, cached_at)
+    VALUES
+      (@scryfall_id, @name, @set_code, @set_name, @collector_number, @image_uri, @image_back,
+       @mana_cost, @type_line, @oracle_text, @colors, @color_identity, @full_art, @rarity,
+       @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, datetime('now'))
+  `).run(cardToRow(card));
+
+  return db.prepare('SELECT * FROM card_cache WHERE scryfall_id = ?').get(card.id);
+}
+
+app.post('/api/import', async (req, res) => {
   const lines      = (req.body.text || '').split('\n').map(l => l.trim()).filter(Boolean);
   const globalDeckId = req.body.deck_id ? parseInt(req.body.deck_id, 10) : null;
   const added = [], failed = [];
@@ -957,6 +994,38 @@ app.post('/api/import', (req, res) => {
   for (const line of lines) {
     try {
       const [cardPart, deckPart] = line.split('|').map(s => s.trim());
+
+      // Resolve deck_id: prefer pipe-delimited deck name, then global
+      let deckId = globalDeckId;
+      if (deckPart) {
+        const deckRow = db.prepare('SELECT id FROM decks WHERE lower(name) = lower(?)').get(deckPart.trim());
+        if (deckRow) deckId = deckRow.id;
+      }
+
+      // ── Set + collector# only (no card name) ──────────────────────────────
+      const setNumMatch = cardPart.match(SET_NUM_ONLY_RE);
+      if (setNumMatch) {
+        const quantity        = parseInt((setNumMatch[1] || '1').trim(), 10);
+        const foil            = !!setNumMatch[2];
+        const setCode         = setNumMatch[3];
+        const collectorNumber = setNumMatch[4];
+
+        const cached  = await resolveSetNum(setCode, collectorNumber);
+        const isFoil  = foil || (cached.foil_only ? 1 : 0);
+        const name    = cached.name;
+
+        db.transaction(() => {
+          for (let i = 0; i < quantity; i++) {
+            db.prepare('INSERT INTO collection (scryfall_id, name, deck_id, foil) VALUES (?, ?, ?, ?)')
+              .run(cached.scryfall_id, name, deckId, isFoil ? 1 : 0);
+          }
+        })();
+
+        added.push(quantity > 1 ? `${quantity}× ${name} (${setCode} #${collectorNumber})` : `${name} (${setCode} #${collectorNumber})`);
+        continue;
+      }
+
+      // ── Name-based (existing logic) ───────────────────────────────────────
       const match = cardPart.match(/^(\d+)?\s*(foil\s+)?(.+?)(?:\s+\(([A-Za-z0-9]+)\)(?:\s+(\S+?))?)?(?:\s+\*F\*)?$/i);
       if (!match) throw new Error('Could not parse line');
 
@@ -965,13 +1034,6 @@ app.post('/api/import', (req, res) => {
       const name            = match[3].trim();
       const setCode         = match[4]?.toLowerCase() ?? null;
       const collectorNumber = match[5] ?? null;
-
-      // Resolve deck_id: prefer pipe-delimited deck name, then global
-      let deckId = globalDeckId;
-      if (deckPart) {
-        const deckRow = db.prepare('SELECT id FROM decks WHERE lower(name) = lower(?)').get(deckPart.trim());
-        if (deckRow) deckId = deckRow.id;
-      }
 
       let cached = null;
       if (setCode && collectorNumber) {
@@ -988,10 +1050,8 @@ app.post('/api/import', (req, res) => {
 
       db.transaction(() => {
         for (let i = 0; i < quantity; i++) {
-          db.prepare(`
-            INSERT INTO collection (scryfall_id, name, deck_id, foil)
-            VALUES (?, ?, ?, ?)
-          `).run(cached?.scryfall_id ?? null, name, deckId, isFoil ? 1 : 0);
+          db.prepare('INSERT INTO collection (scryfall_id, name, deck_id, foil) VALUES (?, ?, ?, ?)')
+            .run(cached?.scryfall_id ?? null, name, deckId, isFoil ? 1 : 0);
         }
       })();
 

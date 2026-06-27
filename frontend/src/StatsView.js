@@ -15,8 +15,12 @@ export default function StatsView({ stats }) {
     (a, b) => RARITY_ORDER.indexOf(a.rarity) - RARITY_ORDER.indexOf(b.rarity)
   );
   const maxRarity = Math.max(...sortedRarity.map(r => r.n), 1);
-  const maxDeck   = Math.max(...(stats.byDeck || []).map(d => d.n), 1);
-  const maxValue  = Math.max(...(stats.byDeck || []).map(d => d.value || 0), 1);
+  const deckRows   = (stats.byDeck || []).filter(d => d.type !== 'binder');
+  const binderRows = (stats.byDeck || []).filter(d => d.type === 'binder');
+  const maxDeck   = Math.max(...deckRows.map(d => d.n), 1);
+  const maxValue  = Math.max(...deckRows.map(d => d.value || 0), 1);
+  const maxBinder      = Math.max(...binderRows.map(d => d.n), 1);
+  const maxBinderValue = Math.max(...binderRows.map(d => d.value || 0), 1);
 
   return (
     <div className="stats-view">
@@ -37,7 +41,7 @@ export default function StatsView({ stats }) {
           <div className="stat-label">Foil Copies</div>
         </div>
         <div className="stat-card">
-          <div className="stat-num">{(stats.byDeck || []).filter(d => d.deck !== 'Unassigned').length}</div>
+          <div className="stat-num">{deckRows.filter(d => d.deck !== 'Unassigned').length}</div>
           <div className="stat-label">Decks</div>
         </div>
         <div className="stat-card stat-card-highlight">
@@ -67,24 +71,18 @@ export default function StatsView({ stats }) {
         {/* ── By Deck — count + value ── */}
         <div className="chart-block">
           <h3>By Deck</h3>
-          {(stats.byDeck || []).length === 0 && (
+          {deckRows.length === 0 && (
             <p className="empty-note">No deck assignments yet.</p>
           )}
-          {(stats.byDeck || []).map(d => (
+          {deckRows.map(d => (
             <div key={d.deck} className="bar-row deck-bar-row">
               <span className="bar-label">{d.deck}</span>
               <div className="bar-tracks">
                 <div className="bar-track">
-                  <div
-                    className="bar-fill"
-                    style={{ width: `${(d.n / maxDeck) * 100}%`, background: '#7b4fc8' }}
-                  />
+                  <div className="bar-fill" style={{ width: `${(d.n / maxDeck) * 100}%`, background: '#7b4fc8' }} />
                 </div>
                 <div className="bar-track bar-track-value">
-                  <div
-                    className="bar-fill"
-                    style={{ width: `${((d.value || 0) / maxValue) * 100}%`, background: '#2e9e6e' }}
-                  />
+                  <div className="bar-fill" style={{ width: `${((d.value || 0) / maxValue) * 100}%`, background: '#2e9e6e' }} />
                 </div>
               </div>
               <div className="bar-nums">
@@ -93,13 +91,41 @@ export default function StatsView({ stats }) {
               </div>
             </div>
           ))}
-          {(stats.byDeck || []).length > 0 && (
+          {deckRows.length > 0 && (
             <div className="deck-legend">
               <span className="legend-swatch" style={{ background: '#7b4fc8' }} /> Cards
               <span className="legend-swatch" style={{ background: '#2e9e6e' }} /> Value
             </div>
           )}
         </div>
+
+        {/* ── By Binder — count + value ── */}
+        {binderRows.length > 0 && (
+          <div className="chart-block">
+            <h3>By Binder</h3>
+            {binderRows.map(d => (
+              <div key={d.deck} className="bar-row deck-bar-row">
+                <span className="bar-label">📒 {d.deck}</span>
+                <div className="bar-tracks">
+                  <div className="bar-track">
+                    <div className="bar-fill" style={{ width: `${(d.n / maxBinder) * 100}%`, background: '#3fad6e' }} />
+                  </div>
+                  <div className="bar-track bar-track-value">
+                    <div className="bar-fill" style={{ width: `${((d.value || 0) / maxBinderValue) * 100}%`, background: '#2e9e6e' }} />
+                  </div>
+                </div>
+                <div className="bar-nums">
+                  <span className="bar-num">{d.n} Card(s): </span>
+                  <span className="bar-num bar-num-value">{fmt(d.value)}</span>
+                </div>
+              </div>
+            ))}
+            <div className="deck-legend">
+              <span className="legend-swatch" style={{ background: '#3fad6e' }} /> Cards
+              <span className="legend-swatch" style={{ background: '#2e9e6e' }} /> Value
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
