@@ -6,3 +6,4 @@ data/
 frontend/build/
 docker-compose.dev.yml
 CLAUDE.md
+.claude/
