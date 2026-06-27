@@ -583,6 +583,11 @@ a { color: var(--gold); }
 .bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
 .bar-num { width: 36px; text-align: right; font-size: 0.88rem; color: var(--text-dim); }
 .empty-note { color: var(--text-dim); font-size: 0.9rem; font-style: italic; }
+.location-stat-row { display: flex; justify-content: space-between; align-items: baseline; padding: 7px 0; border-bottom: 1px solid var(--border); gap: 12px; }
+.location-stat-row:last-child { border-bottom: none; }
+.location-stat-name { font-size: 0.92rem; color: var(--text); }
+.location-stat-info { font-size: 0.88rem; color: var(--text-dim); white-space: nowrap; }
+.location-stat-value { color: var(--success); }
 
 /* ── Scroll-to-top button ───────────────────────────────────────────────────── */
 .scroll-top-btn {
