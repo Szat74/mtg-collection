@@ -683,11 +683,12 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, onGroupC
 export default function CollectionView({ cards: initialCards, decks, groups, onGroupCreated, refresh, showToast }) {
   const [cards, setCards]               = useState(initialCards);
   const [search, setSearch]             = useState('');
-  const [filterDecks, setFilterDecks]   = useState(new Set());
-  const [filterGroups, setFilterGroups] = useState(new Set());
-  const [filterFoil, setFilterFoil]     = useState('');
-  const [filterSets, setFilterSets]     = useState(new Set());
-  const [filterColors, setFilterColors] = useState(new Set());
+  const [filterDecks, setFilterDecks]         = useState(new Set());
+  const [filterGroups, setFilterGroups]       = useState(new Set());
+  const [filterFoil, setFilterFoil]           = useState('');
+  const [filterSets, setFilterSets]           = useState(new Set());
+  const [filterColors, setFilterColors]       = useState(new Set());
+  const [filterUnassigned, setFilterUnassigned] = useState(false);
 
   const allSets = useMemo(() => {
     const seen = new Map();
@@ -700,9 +701,9 @@ export default function CollectionView({ cards: initialCards, decks, groups, onG
   const [order, setOrder]               = useState('desc');
   const [filtersOpen, setFiltersOpen]   = useState(false);
 
-  const hasFilters = !!(filterDecks.size || filterGroups.size || filterFoil || filterSets.size || filterColors.size);
-  const clearAllFilters = () => { setFilterDecks(new Set()); setFilterGroups(new Set()); setFilterFoil(''); setFilterSets(new Set()); setFilterColors(new Set()); };
-  const activeFilterCount = [filterDecks.size > 0, filterGroups.size > 0, !!filterFoil, filterSets.size > 0, filterColors.size > 0].filter(Boolean).length;
+  const hasFilters = !!(filterDecks.size || filterGroups.size || filterFoil || filterSets.size || filterColors.size || filterUnassigned);
+  const clearAllFilters = () => { setFilterDecks(new Set()); setFilterGroups(new Set()); setFilterFoil(''); setFilterSets(new Set()); setFilterColors(new Set()); setFilterUnassigned(false); };
+  const activeFilterCount = [filterDecks.size > 0, filterGroups.size > 0, !!filterFoil, filterSets.size > 0, filterColors.size > 0, filterUnassigned].filter(Boolean).length;
   const SORT_LABELS = { name: 'Name', prices_usd: 'Price', rarity: 'Rarity', set_name: 'Set', added_at: 'Added' };
   const cycleSort = (field) => {
     if (sort === field) setOrder(o => o === 'asc' ? 'desc' : 'asc');
@@ -723,6 +724,7 @@ export default function CollectionView({ cards: initialCards, decks, groups, onG
     if (filterDecks.size > 0)  params.deck   = [...filterDecks].join(',');
     if (filterGroups.size > 0) params.group  = [...filterGroups].join(',');
     if (filterFoil !== '')      params.foil   = filterFoil;
+    if (filterUnassigned)       params.unassigned = 'true';
     if (filterSets.size > 0)   params.set    = [...filterSets].join(',');
     if (filterColors.size > 0) params.colors = [...filterColors].join(',');
     params.sort  = sort;
@@ -733,7 +735,7 @@ export default function CollectionView({ cards: initialCards, decks, groups, onG
       .then(data => { if (data) setCards(data); })
       .catch(() => {});
     return () => controller.abort();
-  }, [search, filterDecks, filterGroups, filterFoil, filterSets, filterColors, sort, order]);
+  }, [search, filterDecks, filterGroups, filterFoil, filterSets, filterColors, filterUnassigned, sort, order]);
 
   // updatedRows are full collection rows returned by PATCH (with groups: [{id,name}], deck_id)
   const handleUpdate = (updatedRows) => {
@@ -951,6 +953,13 @@ export default function CollectionView({ cards: initialCards, decks, groups, onG
               >{code}</button>
             ))}
           </div>
+          <button
+            className={`btn-sm${filterUnassigned ? ' btn-save filter-active' : ''}`}
+            onClick={() => setFilterUnassigned(u => !u)}
+            title="Show only cards not assigned to any deck or binder"
+          >
+            {filterUnassigned ? '✓ Not in deck' : 'Not in deck'}
+          </button>
           <div className="sort-group">
             {Object.entries(SORT_LABELS).map(([field, label]) => (
               <button

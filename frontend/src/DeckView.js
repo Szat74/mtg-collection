@@ -21,8 +21,6 @@ const COLOR_NAME = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green' };
 
 const TYPE_KEYS = ['Planeswalker', 'Battle', 'Creature', 'Land', 'Artifact', 'Enchantment', 'Instant', 'Sorcery'];
 
-// Returns [{type, primary}] — one entry per distinct type found across all faces.
-// Face 0 is "primary"; additional faces are secondary (flip contributions).
 function getTypeGroups(type_line) {
   if (!type_line) return [{ type: 'Other', primary: true }];
   const faces = type_line.split(' // ');
@@ -61,6 +59,8 @@ function parseCmc(mana_cost) {
 
 function sortCards(cards, sortBy) {
   return [...cards].sort((a, b) => {
+    // Proxies always sort after owned cards within a group
+    if (!!a.is_proxy !== !!b.is_proxy) return a.is_proxy ? 1 : -1;
     if (sortBy === 'cmc') {
       const diff = parseCmc(a.mana_cost) - parseCmc(b.mana_cost);
       if (diff !== 0) return diff;
@@ -75,7 +75,6 @@ function groupCards(cards, groupBy, sortBy) {
   for (const card of cards) {
     if (groupBy === 'type') {
       const groups = getTypeGroups(card.type_line);
-      // If all faces share the same type, it's a pure card in one group
       const allSame = groups.every(g => g.type === groups[0].type);
       groups.forEach(({ type, primary }) => {
         if (!map[type]) map[type] = { pure: [], flip: [] };
@@ -115,7 +114,7 @@ function ColorPips({ colors }) {
   );
 }
 
-function DeckCardTile({ card, onRemove }) {
+function DeckCardTile({ card, onRemove, onProxyInc, onProxyDec }) {
   const [flipped, setFlipped] = useState(false);
   const isFoil  = !!card.foil;
   const hasBack = !!card.image_back;
@@ -127,7 +126,8 @@ function DeckCardTile({ card, onRemove }) {
   const hasViolations = card.violations?.length > 0;
 
   return (
-    <div className={`card-tile dv-card-tile ${isFoil ? 'foil' : ''} ${hasViolations ? 'has-violation' : ''}`}>
+    <div className={`card-tile dv-card-tile ${isFoil ? 'foil' : ''} ${hasViolations ? 'has-violation' : ''} ${card.is_proxy ? 'dv-proxy-tile' : ''}`}>
+      {card.is_proxy && <div className="dv-proxy-banner">PROXY</div>}
       <div className="dv-violation-badges">
         {hasViolations && card.violations.map((v, i) => (
           <span key={i} className="dv-violation-badge" title={v.message}>
@@ -137,7 +137,7 @@ function DeckCardTile({ card, onRemove }) {
         {hasBack && <span className="flip-hint" title="Click to flip">↻</span>}
       </div>
       {onRemove && (
-        <button className="dv-tile-remove" onClick={e => { e.stopPropagation(); onRemove(card); }} title="Remove from deck">✕</button>
+        <button className="dv-tile-remove" onClick={e => { e.stopPropagation(); onRemove(card); }} title={card.is_proxy ? 'Remove proxy' : 'Remove from deck'}>✕</button>
       )}
       <div className="card-img-wrap" onClick={() => hasBack && setFlipped(f => !f)}>
         {imgSrc
@@ -146,7 +146,7 @@ function DeckCardTile({ card, onRemove }) {
         }
         {isFoil && <span className="foil-badge">✦ Foil</span>}
         {price && <span className="price-overlay">{price}</span>}
-        {card.quantity > 1 && <span className="dv-qty-badge">×{card.quantity}</span>}
+        {card.quantity > 1 && !card.is_proxy && <span className="dv-qty-badge">×{card.quantity}</span>}
       </div>
       <div className="card-info">
         <div className="card-name">{card.name}</div>
@@ -155,12 +155,19 @@ function DeckCardTile({ card, onRemove }) {
           <span>{card.set_code?.toUpperCase()}{card.collector_number ? ` #${card.collector_number}` : ''}</span>
         </div>
         <div className="card-sub" style={{ fontSize: 10 }}>{card.type_line}</div>
+        {card.is_proxy && (
+          <div className="dv-proxy-qty-row">
+            <button className="dv-proxy-qty-btn" onClick={() => onProxyDec(card)}>−</button>
+            <span className="dv-proxy-qty-count">×{card.quantity}</span>
+            <button className="dv-proxy-qty-btn" onClick={() => onProxyInc(card)}>+</button>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-function DeckListRow({ card, onRemove }) {
+function DeckListRow({ card, onRemove, onProxyInc, onProxyDec }) {
   const [expanded, setExpanded] = useState(false);
   const [flipped, setFlipped]   = useState(false);
   const [expandUp, setExpandUp] = useState(false);
@@ -177,22 +184,19 @@ function DeckListRow({ card, onRemove }) {
     if (!imgSrc) return;
     if (!expanded && rowRef.current) {
       const rect = rowRef.current.getBoundingClientRect();
-      // card image ~320px tall + optional flip button
       setExpandUp(rect.bottom + 340 > window.innerHeight);
     }
     setExpanded(e => !e);
   }
 
   return (
-    <li ref={rowRef} className={`dv-list-row ${isFoil ? 'dv-list-row--foil' : ''}`} onMouseLeave={() => setExpanded(false)}>
-      {/* Hover preview (only when not expanded) */}
+    <li ref={rowRef} className={`dv-list-row ${isFoil ? 'dv-list-row--foil' : ''} ${card.is_proxy ? 'dv-list-row--proxy' : ''}`} onMouseLeave={() => setExpanded(false)}>
       {imgSrc && !expanded && (
         <div className="dv-list-hover-img">
           <img src={imgSrc} alt={card.name} />
         </div>
       )}
 
-      {/* Color pips */}
       <span className="dv-list-pips">
         {ci.length === 0
           ? <span className="dv-list-colorless">◇</span>
@@ -210,7 +214,6 @@ function DeckListRow({ card, onRemove }) {
         }
       </span>
 
-      {/* Name — click to toggle image */}
       <span
         className={`dv-list-name ${imgSrc ? 'dv-list-name--clickable' : ''}`}
         onClick={handleNameClick}
@@ -218,19 +221,26 @@ function DeckListRow({ card, onRemove }) {
         {card.name}
       </span>
 
-      {/* Badges */}
       <span className="dv-list-right">
+        {card.is_proxy && <span className="dv-list-proxy-badge">PROXY</span>}
         {isFoil && <span className="dv-list-foil">✦</span>}
-        {card.quantity > 1 && <span className="dv-list-qty">×{card.quantity}</span>}
+        {card.is_proxy ? (
+          <>
+            <button className="dv-proxy-qty-btn dv-proxy-qty-btn--sm" onClick={() => onProxyDec(card)}>−</button>
+            <span className="dv-list-qty">×{card.quantity}</span>
+            <button className="dv-proxy-qty-btn dv-proxy-qty-btn--sm" onClick={() => onProxyInc(card)}>+</button>
+          </>
+        ) : (
+          card.quantity > 1 && <span className="dv-list-qty">×{card.quantity}</span>
+        )}
         {hasViolations && (
           <span className="dv-list-violation" title={card.violations.map(v => v.message).join('; ')}>⚠</span>
         )}
         {onRemove && (
-          <button className="dv-list-remove" onClick={() => onRemove(card)} title="Remove from deck">✕</button>
+          <button className="dv-list-remove" onClick={() => onRemove(card)} title={card.is_proxy ? 'Remove proxy' : 'Remove from deck'}>✕</button>
         )}
       </span>
 
-      {/* Expanded image */}
       {expanded && imgSrc && (
         <div className={`dv-list-expanded-img${expandUp ? ' dv-list-expanded-img--up' : ''}`}>
           <img src={imgSrc} alt={card.name} onClick={() => setExpanded(false)} />
@@ -243,7 +253,7 @@ function DeckListRow({ card, onRemove }) {
   );
 }
 
-function CollapsibleGroup({ label, cards, flipCards = [], groupBy, viewMode, onRemove }) {
+function CollapsibleGroup({ label, cards, flipCards = [], groupBy, viewMode, onRemove, onProxyInc, onProxyDec }) {
   const [open, setOpen] = useState(true);
   const pureTotal = cards.reduce((s, c) => s + (c.quantity || 1), 0);
   const flipTotal = flipCards.reduce((s, c) => s + (c.quantity || 1), 0);
@@ -269,16 +279,16 @@ function CollapsibleGroup({ label, cards, flipCards = [], groupBy, viewMode, onR
       </div>
       {open && (viewMode === 'grid' ? (
         <div className="card-grid dv-card-grid">
-          {cards.map(card => <DeckCardTile key={card.ids[0]} card={card} onRemove={onRemove} />)}
-          {flipCards.map(card => <DeckCardTile key={`flip-${card.ids[0]}`} card={card} onRemove={onRemove} />)}
+          {cards.map(card => <DeckCardTile key={card.is_proxy ? `proxy-${card.ids[0]}` : card.ids[0]} card={card} onRemove={onRemove} onProxyInc={onProxyInc} onProxyDec={onProxyDec} />)}
+          {flipCards.map(card => <DeckCardTile key={`flip-${card.ids[0]}`} card={card} onRemove={onRemove} onProxyInc={onProxyInc} onProxyDec={onProxyDec} />)}
         </div>
       ) : (
         <ul className="dv-list-cards">
-          {cards.map(card => <DeckListRow key={card.ids[0]} card={card} onRemove={onRemove} />)}
+          {cards.map(card => <DeckListRow key={card.is_proxy ? `proxy-${card.ids[0]}` : card.ids[0]} card={card} onRemove={onRemove} onProxyInc={onProxyInc} onProxyDec={onProxyDec} />)}
           {flipCards.length > 0 && (
             <li className="dv-flip-divider">↻ also plays as {label.toLowerCase()}</li>
           )}
-          {flipCards.map(card => <DeckListRow key={`flip-${card.ids[0]}`} card={card} onRemove={onRemove} />)}
+          {flipCards.map(card => <DeckListRow key={`flip-${card.ids[0]}`} card={card} onRemove={onRemove} onProxyInc={onProxyInc} onProxyDec={onProxyDec} />)}
         </ul>
       ))}
     </div>
@@ -316,8 +326,8 @@ function ViolationsBanner({ summary, cards }) {
       {expanded && (
         <ul className="dv-violations-list">
           {cards.filter(c => c.violations.length > 0).map(card => (
-            <li key={card.ids[0]}>
-              <strong>{card.name}</strong>:{' '}
+            <li key={card.is_proxy ? `proxy-${card.ids[0]}` : card.ids[0]}>
+              <strong>{card.name}</strong>{card.is_proxy ? ' (proxy)' : ''}:{' '}
               {card.violations.map(v => v.message).join('; ')}
             </li>
           ))}
@@ -336,15 +346,24 @@ export default function DeckView({ decks, refresh, showToast }) {
   const [groupBy, setGroupBy]       = useState('type');
   const [sortBy, setSortBy]         = useState('name');
 
-  // Add-card panel
-  const [showAdd, setShowAdd]           = useState(false);
+  // addMode: null | 'collect' | 'collection' | 'proxy'
+  const [addMode, setAddMode]           = useState(null);
+
+  // Shared Scryfall search state (used by 'collect' and 'proxy' modes)
   const [addQuery, setAddQuery]         = useState('');
   const [addResults, setAddResults]     = useState([]);
   const [addPrintings, setAddPrintings] = useState([]);
   const [addSelected, setAddSelected]   = useState(null);
   const [addFoil, setAddFoil]           = useState(false);
   const [addLoading, setAddLoading]     = useState(false);
+  const [proxyQty, setProxyQty]         = useState(1);
   const addDebounce = useRef(null);
+
+  // Collection search state (used by 'collection' mode)
+  const [collSearch, setCollSearch]   = useState('');
+  const [collResults, setCollResults] = useState([]);
+  const [collLoading, setCollLoading] = useState(false);
+  const collDebounce = useRef(null);
 
   const selectedDeck = decks.find(d => d.id === selectedId) ?? null;
 
@@ -357,16 +376,12 @@ export default function DeckView({ decks, refresh, showToast }) {
       .catch(() => { setDeckData(null); setLoading(false); });
   }, [selectedId, decks]);
 
-  useEffect(() => {
-    if (!selectedDeck) return;
-    // images come from deckData cards, no separate fetch needed
-  }, [selectedDeck]);
-
   const cmdImage     = deckData?.cards?.find(c => c.ids.includes(selectedDeck?.commander_id))?.image_uri ?? null;
   const partnerImage = deckData?.cards?.find(c => c.ids.includes(selectedDeck?.partner_id))?.image_uri ?? null;
 
   const sizeLimit  = selectedDeck ? (SIZE_LIMITS[selectedDeck.format] ?? null) : null;
   const totalCards = deckData?.summary?.total ?? 0;
+  const proxyCount = deckData?.summary?.proxies ?? 0;
 
   const sizeColor = sizeLimit
     ? (totalCards === sizeLimit ? 'var(--success)' : totalCards > sizeLimit ? 'var(--danger)' : 'var(--text-dim)')
@@ -384,7 +399,21 @@ export default function DeckView({ decks, refresh, showToast }) {
       .catch(() => {});
   }, [selectedId]);
 
-  // ── Add-panel search ────────────────────────────────────────────────────────
+  // ── Panel helpers ───────────────────────────────────────────────────────────
+  const resetAddPanel = () => {
+    setAddQuery(''); setAddResults([]); setAddPrintings([]); setAddSelected(null);
+    setAddFoil(false); setProxyQty(1);
+    setCollSearch(''); setCollResults([]);
+  };
+
+  const toggleMode = (mode) => {
+    setAddMode(m => {
+      resetAddPanel();
+      return m === mode ? null : mode;
+    });
+  };
+
+  // ── Scryfall search (shared by 'collect' + 'proxy') ─────────────────────────
   const parseSetNum = (q) => {
     const m = q.trim().match(/^([a-zA-Z0-9]{2,6})\s+#?(\d+[a-zA-Z]?)$/);
     return m ? { set: m[1], num: m[2] } : null;
@@ -439,6 +468,7 @@ export default function DeckView({ decks, refresh, showToast }) {
     setAddLoading(false);
   };
 
+  // ── Mode: Add & Collect ─────────────────────────────────────────────────────
   const handleAddCard = async () => {
     if (!addSelected || !selectedId) return;
     setAddLoading(true);
@@ -459,29 +489,127 @@ export default function DeckView({ decks, refresh, showToast }) {
     setAddLoading(false);
   };
 
-  // ── Remove one copy from deck (unassign) ────────────────────────────────────
-  const handleRemove = useCallback(async (card) => {
-    const id = card.ids[0];
-    const res = await fetch(`${API}/cards/${id}`, {
-      method: 'PATCH',
+  // ── Mode: Add Proxy ─────────────────────────────────────────────────────────
+  const handleAddProxy = async () => {
+    if (!addSelected || !selectedId) return;
+    setAddLoading(true);
+    const res = await fetch(`${API}/decks/${selectedId}/proxies`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ deck_id: null }),
+      body: JSON.stringify({ scryfall_card: addSelected, foil: addFoil, quantity: proxyQty }),
     });
     if (res.ok) {
-      showToast(`Removed ${card.name} from deck`);
+      showToast(`Added ${proxyQty > 1 ? `${proxyQty}× ` : ''}${addSelected.name} (proxy)`);
+      reloadDeck();
+      setAddQuery(''); setAddResults([]); setAddPrintings([]); setAddSelected(null); setAddFoil(false); setProxyQty(1);
+    } else {
+      const err = await res.json().catch(() => ({}));
+      showToast(err.error || 'Failed to add proxy', 'error');
+    }
+    setAddLoading(false);
+  };
+
+  // ── Mode: From Collection ───────────────────────────────────────────────────
+  const handleCollSearch = (v) => {
+    setCollSearch(v);
+    setCollResults([]);
+    clearTimeout(collDebounce.current);
+    if (v.length < 2) return;
+    collDebounce.current = setTimeout(async () => {
+      setCollLoading(true);
+      try {
+        const res = await fetch(`${API}/cards?search=${encodeURIComponent(v)}&unassigned=true`);
+        let data = await res.json();
+        // Filter by commander color identity if applicable
+        if (selectedDeck?.format === 'commander' && selectedDeck.colors?.length) {
+          data = data.filter(card => {
+            const ci = card.color_identity ? JSON.parse(card.color_identity) : [];
+            return ci.every(c => selectedDeck.colors.includes(c));
+          });
+        }
+        // Filter out pauper non-commons (grey out instead — show but mark)
+        setCollResults(data);
+      } catch {}
+      setCollLoading(false);
+    }, 300);
+  };
+
+  const handleCollAssign = async (card) => {
+    const unassignedCopy = card.copies?.find(c => !c.deck_id);
+    if (!unassignedCopy) return;
+    const res = await fetch(`${API}/cards/${unassignedCopy.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deck_id: selectedId }),
+    });
+    if (res.ok) {
+      showToast(`Added ${card.name} from collection`);
       reloadDeck();
       refresh();
+      // Remove from results so user can see remaining unassigned cards
+      setCollResults(prev => {
+        const updated = prev.map(c => {
+          if (c.name !== card.name || c.set_code !== card.set_code) return c;
+          const newCopies = c.copies.map((cp, i) =>
+            i === c.copies.findIndex(x => !x.deck_id) ? { ...cp, deck_id: selectedId } : cp
+          );
+          const remaining = newCopies.filter(cp => !cp.deck_id).length;
+          return remaining > 0 ? { ...c, copies: newCopies, quantity: remaining } : null;
+        }).filter(Boolean);
+        return updated;
+      });
     } else {
-      showToast('Failed to remove card', 'error');
+      const err = await res.json().catch(() => ({}));
+      showToast(err.error || 'Failed to assign card', 'error');
     }
-  }, [reloadDeck, refresh, showToast]);
+  };
 
+  // ── Remove handlers ─────────────────────────────────────────────────────────
+  const handleRemove = useCallback(async (card) => {
+    if (card.is_proxy) {
+      const res = await fetch(`${API}/decks/${selectedId}/proxies/${card.ids[0]}`, { method: 'DELETE' });
+      if (res.ok) { showToast(`Removed ${card.name} proxy`); reloadDeck(); }
+      else showToast('Failed to remove proxy', 'error');
+    } else {
+      const res = await fetch(`${API}/cards/${card.ids[0]}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deck_id: null }),
+      });
+      if (res.ok) { showToast(`Removed ${card.name} from deck`); reloadDeck(); refresh(); }
+      else showToast('Failed to remove card', 'error');
+    }
+  }, [selectedId, reloadDeck, refresh, showToast]);
+
+  const handleProxyInc = useCallback(async (card) => {
+    const res = await fetch(`${API}/decks/${selectedId}/proxies/${card.ids[0]}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ quantity: card.quantity + 1 }),
+    });
+    if (res.ok) reloadDeck();
+    else showToast('Failed to update proxy', 'error');
+  }, [selectedId, reloadDeck, showToast]);
+
+  const handleProxyDec = useCallback(async (card) => {
+    if (card.quantity <= 1) return handleRemove(card);
+    const res = await fetch(`${API}/decks/${selectedId}/proxies/${card.ids[0]}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ quantity: card.quantity - 1 }),
+    });
+    if (res.ok) reloadDeck();
+    else showToast('Failed to update proxy', 'error');
+  }, [selectedId, reloadDeck, showToast, handleRemove]);
+
+  // ── Export ──────────────────────────────────────────────────────────────────
   function exportDeck() {
     if (!deckData?.cards?.length || !selectedDeck) return;
     const lines = [];
     const commanderIds = [selectedDeck.commander_id, selectedDeck.partner_id].filter(Boolean);
-    const commanders = deckData.cards.filter(c => c.ids.some(id => commanderIds.includes(id)));
-    const mainboard  = deckData.cards.filter(c => !c.ids.some(id => commanderIds.includes(id)));
+    const commanders = deckData.cards.filter(c => !c.is_proxy && c.ids.some(id => commanderIds.includes(id)));
+    const mainboard  = deckData.cards.filter(c => !c.is_proxy && !c.ids.some(id => commanderIds.includes(id)));
+    const proxyCards = deckData.cards.filter(c => c.is_proxy);
     const fmt = (c, qty = c.quantity) => {
       const set = c.set_code ? ` (${c.set_code.toUpperCase()})` : '';
       const num = c.collector_number ? ` ${c.collector_number}` : '';
@@ -494,6 +622,11 @@ export default function DeckView({ decks, refresh, showToast }) {
       lines.push('// Deck');
     }
     mainboard.forEach(c => lines.push(fmt(c)));
+    if (proxyCards.length) {
+      lines.push('');
+      lines.push('// Proxies');
+      proxyCards.forEach(c => lines.push(fmt(c)));
+    }
     const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
@@ -502,6 +635,76 @@ export default function DeckView({ decks, refresh, showToast }) {
     a.click();
     URL.revokeObjectURL(url);
   }
+
+  // ── Scryfall search panel (shared JSX for 'collect' and 'proxy') ─────────────
+  const scryfallPanel = (onConfirm, confirmLabel) => (
+    <>
+      <div className="dv-add-search-row">
+        <input
+          className="dv-add-input"
+          placeholder="Card name or SET #number…"
+          value={addQuery}
+          onChange={e => handleAddQuery(e.target.value)}
+          autoFocus
+        />
+        {addLoading && <span className="dv-add-spinner">…</span>}
+      </div>
+      {addResults.length > 0 && (
+        <ul className="dv-add-results">
+          {addResults.map(c => (
+            <li key={c.id} className="dv-add-result" onClick={() => selectAddName(c)}>
+              {c.name}
+            </li>
+          ))}
+        </ul>
+      )}
+      {addPrintings.length > 0 && (
+        <div className="dv-add-printings">
+          {addPrintings.map(p => {
+            const label = `${(p.set_name || p.set || '').slice(0, 24)} #${p.collector_number}`;
+            return (
+              <button
+                key={p.id}
+                className={`dv-add-printing-btn${addSelected?.id === p.id ? ' active' : ''}`}
+                onClick={() => selectAddCard(p)}
+              >{label}</button>
+            );
+          })}
+        </div>
+      )}
+      {addSelected && (
+        <div className="dv-add-confirm-row">
+          {(addSelected.image_uris?.normal ?? addSelected.card_faces?.[0]?.image_uris?.normal) && (
+            <img
+              className="dv-add-preview"
+              src={addSelected.image_uris?.normal ?? addSelected.card_faces?.[0]?.image_uris?.normal}
+              alt={addSelected.name}
+            />
+          )}
+          <div className="dv-add-confirm-actions">
+            <label className="dv-add-foil-label">
+              <input type="checkbox" checked={addFoil} onChange={e => setAddFoil(e.target.checked)} />
+              Foil
+            </label>
+            {addMode === 'proxy' && (
+              <label className="dv-add-foil-label">
+                Qty:
+                <input
+                  type="number" min="1" max="99"
+                  className="dv-proxy-qty-input"
+                  value={proxyQty}
+                  onChange={e => setProxyQty(Math.max(1, parseInt(e.target.value) || 1))}
+                />
+              </label>
+            )}
+            <button className="dv-add-confirm-btn" onClick={onConfirm} disabled={addLoading}>
+              {confirmLabel}
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
 
   return (
     <div className={`dv-root${selectedId ? ' dv-has-selection' : ''}`}>
@@ -552,6 +755,11 @@ export default function DeckView({ decks, refresh, showToast }) {
                 <ColorPips colors={selectedDeck.colors} />
                 <span className="dv-detail-count" style={{ color: sizeColor }}>
                   {totalCards}{sizeLimit ? ` / ${sizeLimit}` : ' cards'}
+                  {proxyCount > 0 && (
+                    <span className="dv-proxy-count-hint">
+                      {proxyCount} prox{proxyCount === 1 ? 'y' : 'ies'}
+                    </span>
+                  )}
                   {sizeLimit && totalCards !== sizeLimit && (
                     <span style={{ fontSize: 10, marginLeft: 4 }}>
                       ({totalCards < sizeLimit ? `${sizeLimit - totalCards} short` : `${totalCards - sizeLimit} over`})
@@ -559,9 +767,27 @@ export default function DeckView({ decks, refresh, showToast }) {
                   )}
                 </span>
 
-                {/* View toggle + sort controls */}
-                {deckData?.cards?.length > 0 && (
-                  <div className="dv-view-toggle">
+                {/* Add buttons — always visible when a deck is selected */}
+                <div className="dv-view-toggle">
+                  <button
+                    className={`dv-toggle-btn${addMode === 'collection' ? ' active' : ''}`}
+                    onClick={() => toggleMode('collection')}
+                    title="Assign a card from your collection to this deck"
+                  >+ From Collection</button>
+                  <button
+                    className={`dv-toggle-btn${addMode === 'collect' ? ' active' : ''}`}
+                    onClick={() => toggleMode('collect')}
+                    title="Add a new card to your collection and this deck"
+                  >+ Add &amp; Collect</button>
+                  <button
+                    className={`dv-toggle-btn dv-proxy-add-btn${addMode === 'proxy' ? ' active' : ''}`}
+                    onClick={() => toggleMode('proxy')}
+                    title="Add a proxy card (not added to collection)"
+                  >+ Add Proxy</button>
+
+                  {/* View / sort controls — only when there are cards */}
+                  {deckData?.cards?.length > 0 && (<>
+                    <span className="dv-toggle-divider" />
                     <button
                       className={`dv-toggle-btn ${viewMode === 'grid' ? 'active' : ''}`}
                       onClick={() => setViewMode('grid')}
@@ -574,12 +800,6 @@ export default function DeckView({ decks, refresh, showToast }) {
                     >≡ List</button>
                     <span className="dv-toggle-divider" />
                     <button className="dv-toggle-btn" onClick={exportDeck} title="Export decklist as text">⬇ Export</button>
-                    <span className="dv-toggle-divider" />
-                    <button
-                      className={`dv-toggle-btn${showAdd ? ' active' : ''}`}
-                      onClick={() => { setShowAdd(s => !s); setAddQuery(''); setAddResults([]); setAddPrintings([]); setAddSelected(null); }}
-                      title="Add card to deck"
-                    >+ Add</button>
                     <span className="dv-toggle-divider" />
                     <select
                       className="dv-group-select"
@@ -600,11 +820,10 @@ export default function DeckView({ decks, refresh, showToast }) {
                       <option value="name">Sort: name</option>
                       <option value="cmc">Sort: CMC</option>
                     </select>
-                  </div>
-                )}
+                  </>)}
+                </div>
               </div>
 
-              {/* Commander(s) */}
               {selectedDeck.format === 'commander' && (
                 <div className="dv-commanders">
                   <CommanderThumb name={selectedDeck.commander_name} image_uri={cmdImage} />
@@ -618,71 +837,62 @@ export default function DeckView({ decks, refresh, showToast }) {
               )}
             </div>
 
-            {/* Violations banner */}
             {deckData && <ViolationsBanner summary={deckData.summary} cards={deckData.cards ?? []} />}
 
-            {/* Add-card panel */}
-            {showAdd && (
+            {/* ── Add panels ── */}
+            {addMode === 'collection' && (
               <div className="dv-add-panel">
+                <div className="dv-add-panel-label">From Collection — assign an unassigned card to this deck</div>
                 <div className="dv-add-search-row">
                   <input
                     className="dv-add-input"
-                    placeholder="Card name or SET #number…"
-                    value={addQuery}
-                    onChange={e => handleAddQuery(e.target.value)}
+                    placeholder="Search your collection…"
+                    value={collSearch}
+                    onChange={e => handleCollSearch(e.target.value)}
                     autoFocus
                   />
-                  {addLoading && <span className="dv-add-spinner">…</span>}
+                  {collLoading && <span className="dv-add-spinner">…</span>}
                 </div>
-
-                {/* Name results dropdown */}
-                {addResults.length > 0 && (
-                  <ul className="dv-add-results">
-                    {addResults.map(c => (
-                      <li key={c.id} className="dv-add-result" onClick={() => selectAddName(c)}>
-                        {c.name}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-
-                {/* Printings picker */}
-                {addPrintings.length > 0 && (
-                  <div className="dv-add-printings">
-                    {addPrintings.map(p => {
-                      const label = `${(p.set_name || p.set || '').slice(0, 24)} #${p.collector_number}`;
+                {collResults.length > 0 && (
+                  <ul className="dv-add-results dv-coll-results">
+                    {collResults.map(card => {
+                      const unassigned = card.copies?.filter(c => !c.deck_id).length ?? 0;
+                      const isPauperIllegal = selectedDeck?.format === 'pauper' && card.rarity && card.rarity !== 'common';
                       return (
-                        <button
-                          key={p.id}
-                          className={`dv-add-printing-btn${addSelected?.id === p.id ? ' active' : ''}`}
-                          onClick={() => selectAddCard(p)}
-                        >{label}</button>
+                        <li
+                          key={card.ids[0]}
+                          className={`dv-add-result dv-coll-result${isPauperIllegal ? ' dv-coll-result--warn' : ''}`}
+                          onClick={() => handleCollAssign(card)}
+                        >
+                          <span className="dv-coll-name">{card.name}</span>
+                          <span className="dv-coll-meta">
+                            {card.set_code?.toUpperCase()}{card.collector_number ? ` #${card.collector_number}` : ''}
+                            {card.foil ? ' ✦' : ''}
+                          </span>
+                          <span className="dv-coll-avail">{unassigned} available</span>
+                          {isPauperIllegal && <span className="dv-coll-warn" title={`Not a common (${card.rarity})`}>⚠ {card.rarity}</span>}
+                        </li>
                       );
                     })}
-                  </div>
+                  </ul>
                 )}
+                {collSearch.length >= 2 && !collLoading && collResults.length === 0 && (
+                  <div className="dv-add-empty">No unassigned cards match{selectedDeck?.format === 'commander' ? ' (color identity filtered)' : ''}.</div>
+                )}
+              </div>
+            )}
 
-                {/* Preview + confirm row */}
-                {addSelected && (
-                  <div className="dv-add-confirm-row">
-                    {(addSelected.image_uris?.normal ?? addSelected.card_faces?.[0]?.image_uris?.normal) && (
-                      <img
-                        className="dv-add-preview"
-                        src={addSelected.image_uris?.normal ?? addSelected.card_faces?.[0]?.image_uris?.normal}
-                        alt={addSelected.name}
-                      />
-                    )}
-                    <div className="dv-add-confirm-actions">
-                      <label className="dv-add-foil-label">
-                        <input type="checkbox" checked={addFoil} onChange={e => setAddFoil(e.target.checked)} />
-                        Foil
-                      </label>
-                      <button className="dv-add-confirm-btn" onClick={handleAddCard} disabled={addLoading}>
-                        Add to deck
-                      </button>
-                    </div>
-                  </div>
-                )}
+            {addMode === 'collect' && (
+              <div className="dv-add-panel">
+                <div className="dv-add-panel-label">Add &amp; Collect — add card to collection and assign to deck</div>
+                {scryfallPanel(handleAddCard, 'Add to deck')}
+              </div>
+            )}
+
+            {addMode === 'proxy' && (
+              <div className="dv-add-panel dv-proxy-panel">
+                <div className="dv-add-panel-label dv-proxy-panel-label">Add Proxy — not added to your collection</div>
+                {scryfallPanel(handleAddProxy, 'Add proxy')}
               </div>
             )}
 
@@ -694,7 +904,7 @@ export default function DeckView({ decks, refresh, showToast }) {
             ) : deckData.cards.length === 0 ? (
               <div className="dv-empty-detail">
                 No cards yet.{' '}
-                <button className="dv-add-inline-btn" onClick={() => setShowAdd(true)}>+ Add a card</button>
+                <button className="dv-add-inline-btn" onClick={() => toggleMode('collect')}>+ Add a card</button>
               </div>
             ) : (
               <div className={viewMode === 'grid' ? 'dv-grid-view' : 'dv-list-view'}>
@@ -702,15 +912,15 @@ export default function DeckView({ decks, refresh, showToast }) {
                   label === null ? (
                     viewMode === 'grid' ? (
                       <div key="all" className="card-grid dv-card-grid">
-                        {cards.map(card => <DeckCardTile key={card.ids[0]} card={card} onRemove={handleRemove} />)}
+                        {cards.map(card => <DeckCardTile key={card.is_proxy ? `proxy-${card.ids[0]}` : card.ids[0]} card={card} onRemove={handleRemove} onProxyInc={handleProxyInc} onProxyDec={handleProxyDec} />)}
                       </div>
                     ) : (
                       <ul key="all" className="dv-list-cards">
-                        {cards.map(card => <DeckListRow key={card.ids[0]} card={card} onRemove={handleRemove} />)}
+                        {cards.map(card => <DeckListRow key={card.is_proxy ? `proxy-${card.ids[0]}` : card.ids[0]} card={card} onRemove={handleRemove} onProxyInc={handleProxyInc} onProxyDec={handleProxyDec} />)}
                       </ul>
                     )
                   ) : (
-                    <CollapsibleGroup key={label} label={label} cards={cards} flipCards={flipCards} groupBy={groupBy} viewMode={viewMode} onRemove={handleRemove} />
+                    <CollapsibleGroup key={label} label={label} cards={cards} flipCards={flipCards} groupBy={groupBy} viewMode={viewMode} onRemove={handleRemove} onProxyInc={handleProxyInc} onProxyDec={handleProxyDec} />
                   )
                 )}
               </div>
@@ -722,7 +932,7 @@ export default function DeckView({ decks, refresh, showToast }) {
       <style>{`
         /* ── View toggle ─────────────────────────────────── */
         .dv-view-toggle {
-          display: flex; align-items: center; gap: 5px; margin-left: auto; flex-shrink: 0;
+          display: flex; align-items: center; gap: 5px; margin-left: auto; flex-shrink: 0; flex-wrap: wrap;
         }
         .dv-toggle-btn {
           background: var(--bg3); border: 1px solid var(--border); color: var(--text-dim);
@@ -733,6 +943,9 @@ export default function DeckView({ decks, refresh, showToast }) {
         .dv-toggle-btn.active {
           background: rgba(123,79,200,0.2); border-color: var(--accent); color: var(--accent);
         }
+        .dv-proxy-add-btn { border-color: rgba(200,160,0,0.4); color: #c8a000; }
+        .dv-proxy-add-btn:hover { border-color: #c8a000; color: #e0b800; }
+        .dv-proxy-add-btn.active { background: rgba(200,160,0,0.15); border-color: #c8a000; color: #e0b800; }
         .dv-group-select {
           background: var(--bg3); border: 1px solid var(--border); color: var(--text-dim);
           font-size: 11px; font-family: var(--font-body); padding: 4px 8px;
@@ -741,6 +954,13 @@ export default function DeckView({ decks, refresh, showToast }) {
         .dv-group-select:focus { border-color: var(--accent); }
         .dv-toggle-divider {
           width: 1px; height: 16px; background: var(--border); margin: 0 3px; flex-shrink: 0;
+        }
+
+        /* ── Proxy count hint ────────────────────────────── */
+        .dv-proxy-count-hint {
+          font-size: 10px; margin-left: 6px; padding: 1px 6px;
+          background: rgba(200,160,0,0.15); border: 1px solid rgba(200,160,0,0.4);
+          color: #c8a000; border-radius: 8px;
         }
 
         /* ── Grid view groups ────────────────────────────── */
@@ -787,6 +1007,10 @@ export default function DeckView({ decks, refresh, showToast }) {
         }
         .dv-list-row:hover { background: var(--bg3); }
         .dv-list-row--foil { background: linear-gradient(90deg, rgba(180,140,255,0.04), transparent); }
+        .dv-list-row--proxy {
+          border-left: 2px dashed rgba(200,160,0,0.5);
+          padding-left: 8px;
+        }
         .dv-list-pips {
           display: flex; align-items: center; gap: 2px; flex-shrink: 0; width: 48px;
         }
@@ -825,6 +1049,11 @@ export default function DeckView({ decks, refresh, showToast }) {
           padding: 0 5px; border-radius: 8px;
         }
         .dv-list-violation { font-size: 10px; color: var(--danger); }
+        .dv-list-proxy-badge {
+          font-size: 9px; font-weight: 700; letter-spacing: 0.06em;
+          background: rgba(200,160,0,0.18); border: 1px solid rgba(200,160,0,0.5);
+          color: #c8a000; padding: 1px 5px; border-radius: 4px;
+        }
 
         /* ── Hover image preview ─────────────────────────── */
         .dv-list-hover-img {
@@ -854,12 +1083,45 @@ export default function DeckView({ decks, refresh, showToast }) {
         .dv-list-row:hover .dv-list-remove { opacity: 1; }
         .dv-list-remove:hover { color: var(--danger); }
 
+        /* ── Proxy tile ──────────────────────────────────── */
+        .dv-proxy-tile {
+          border: 2px dashed rgba(200,160,0,0.6) !important;
+          box-shadow: 0 0 0 1px rgba(200,160,0,0.15) !important;
+        }
+        .dv-proxy-banner {
+          position: absolute; top: 8px; right: 8px; z-index: 12;
+          background: rgba(0,0,0,0.75); color: #c8a000;
+          font-size: 9px; font-weight: 800; letter-spacing: 0.1em;
+          padding: 2px 6px; border-radius: 3px;
+          border: 1px solid rgba(200,160,0,0.6);
+          pointer-events: none;
+        }
+        .dv-proxy-qty-row {
+          display: flex; align-items: center; gap: 6px; margin-top: 4px;
+        }
+        .dv-proxy-qty-count {
+          font-size: 12px; color: var(--gold); min-width: 24px; text-align: center;
+        }
+        .dv-proxy-qty-btn {
+          background: var(--bg3); border: 1px solid var(--border); color: var(--text);
+          width: 22px; height: 22px; border-radius: 50%; cursor: pointer;
+          font-size: 14px; line-height: 1; display: flex; align-items: center; justify-content: center;
+          padding: 0;
+        }
+        .dv-proxy-qty-btn:hover { border-color: #c8a000; color: #c8a000; }
+        .dv-proxy-qty-btn--sm { width: 16px; height: 16px; font-size: 11px; }
+
         /* ── Add-card panel ──────────────────────────────── */
         .dv-add-panel {
           border: 1px solid var(--border); border-radius: 8px;
           background: var(--bg2); padding: 12px; margin-bottom: 12px;
           display: flex; flex-direction: column; gap: 10px;
         }
+        .dv-proxy-panel { border-color: rgba(200,160,0,0.4); }
+        .dv-add-panel-label {
+          font-size: 11px; color: var(--text-dim); font-style: italic;
+        }
+        .dv-proxy-panel-label { color: #c8a000; }
         .dv-add-search-row { display: flex; align-items: center; gap: 8px; }
         .dv-add-input {
           flex: 1; background: var(--bg3); border: 1px solid var(--border);
@@ -868,6 +1130,7 @@ export default function DeckView({ decks, refresh, showToast }) {
         }
         .dv-add-input:focus { border-color: var(--accent); }
         .dv-add-spinner { color: var(--text-dim); font-size: 13px; }
+        .dv-add-empty { font-size: 12px; color: var(--text-dim); padding: 4px 0; }
         .dv-add-results {
           list-style: none; margin: 0; padding: 0;
           border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
@@ -879,6 +1142,19 @@ export default function DeckView({ decks, refresh, showToast }) {
         }
         .dv-add-result:last-child { border-bottom: none; }
         .dv-add-result:hover { background: var(--bg3); color: var(--gold); }
+        .dv-coll-results { max-height: 260px; }
+        .dv-coll-result {
+          display: flex; align-items: center; gap: 10px; cursor: pointer;
+        }
+        .dv-coll-result--warn { opacity: 0.7; }
+        .dv-coll-name { flex: 1; font-size: 13px; }
+        .dv-coll-meta { font-size: 11px; color: var(--text-dim); }
+        .dv-coll-avail {
+          font-size: 11px; color: var(--success);
+          background: rgba(0,180,80,0.08); border: 1px solid rgba(0,180,80,0.2);
+          padding: 1px 6px; border-radius: 8px;
+        }
+        .dv-coll-warn { font-size: 10px; color: var(--danger); }
         .dv-add-printings {
           display: flex; flex-wrap: wrap; gap: 5px;
         }
@@ -893,6 +1169,11 @@ export default function DeckView({ decks, refresh, showToast }) {
         .dv-add-preview { width: 80px; border-radius: 5px; flex-shrink: 0; }
         .dv-add-confirm-actions { display: flex; flex-direction: column; gap: 8px; justify-content: center; }
         .dv-add-foil-label { display: flex; align-items: center; gap: 5px; font-size: 13px; color: var(--text-dim); cursor: pointer; }
+        .dv-proxy-qty-input {
+          width: 48px; background: var(--bg3); border: 1px solid var(--border);
+          color: var(--text); font-size: 13px; font-family: var(--font-body);
+          padding: 2px 6px; border-radius: 4px; outline: none; text-align: center;
+        }
         .dv-add-confirm-btn {
           background: var(--accent); color: #fff; border: none;
           font-size: 13px; font-family: var(--font-body); padding: 6px 16px;

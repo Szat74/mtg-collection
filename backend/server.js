@@ -91,6 +91,19 @@ try { db.exec('ALTER TABLE card_cache ADD COLUMN keywords TEXT'); } catch {}
 try { db.exec('ALTER TABLE decks ADD COLUMN partner_id INTEGER REFERENCES collection(id) ON DELETE SET NULL'); } catch {}
 try { db.exec("ALTER TABLE decks ADD COLUMN type TEXT NOT NULL DEFAULT 'deck'"); } catch {}
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS deck_proxies (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    deck_id     INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+    scryfall_id TEXT REFERENCES card_cache(scryfall_id),
+    name        TEXT NOT NULL,
+    foil        INTEGER NOT NULL DEFAULT 0,
+    quantity    INTEGER NOT NULL DEFAULT 1,
+    added_at    TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_proxy_deck ON deck_proxies (deck_id);
+`);
+
 // ─── Fetch helper ─────────────────────────────────────────────────────────────
 async function scryFetch(url, options = {}) {
   const controller = new AbortController();
@@ -394,7 +407,7 @@ app.get('/api/scryfall/card/:set/:num', async (req, res) => {
 
 // ── Collection — list (grouped) ───────────────────────────────────────────────
 app.get('/api/cards', (req, res) => {
-  const { search, deck, group, foil, colors, set, unmatched, sort = 'name', order = 'asc' } = req.query;
+  const { search, deck, group, foil, colors, set, unmatched, unassigned, sort = 'name', order = 'asc' } = req.query;
 
   const sortMap = {
     name:       'c.name',
@@ -436,6 +449,9 @@ app.get('/api/cards', (req, res) => {
 
   if (unmatched === 'true') {
     sql += ' AND c.scryfall_id IS NULL';
+  }
+  if (unassigned === 'true') {
+    sql += ' AND c.deck_id IS NULL';
   }
   if (search) {
     sql += ' AND lower(c.name) LIKE lower(?)';
@@ -859,6 +875,13 @@ app.delete('/api/decks/:id', (req, res) => {
 // ── Deck cards with violations ────────────────────────────────────────────────
 const SIZE_LIMITS = { commander: 100, standard: 60, pioneer: 60, modern: 60, legacy: 60, vintage: 60, pauper: 60 };
 
+const BASIC_NAMES = new Set(['plains','island','swamp','mountain','forest','wastes','snow-covered plains','snow-covered island','snow-covered swamp','snow-covered mountain','snow-covered forest']);
+function isBasicCard(card) {
+  if (card.type_line?.startsWith('Basic Land')) return true;
+  const names = (card.name || '').split('//').map(n => n.trim().toLowerCase());
+  return names.every(n => BASIC_NAMES.has(n));
+}
+
 app.get('/api/decks/:id/cards', (req, res) => {
   const deckId = parseInt(req.params.id, 10);
   const deck   = db.prepare('SELECT * FROM decks WHERE id = ?').get(deckId);
@@ -871,7 +894,8 @@ app.get('/api/decks/:id/cards', (req, res) => {
     return format === 'commander' ? [...new Set([...cmd.colors, ...partner.colors])] : [];
   })();
 
-  const rows  = db.prepare(`
+  // Owned cards
+  const rows = db.prepare(`
     SELECT c.id, c.scryfall_id, c.name, c.deck_id, c.foil, c.added_at
     FROM collection c
     WHERE c.deck_id = ?
@@ -880,46 +904,66 @@ app.get('/api/decks/:id/cards', (req, res) => {
 
   const grouped = groupRows(rows);
 
-  // Build name → count map (for singleton / copy-limit checks)
+  // Proxy cards — enrich with card_cache data
+  const proxyRows = db.prepare(
+    'SELECT * FROM deck_proxies WHERE deck_id = ? ORDER BY name'
+  ).all(deckId);
+
+  const proxies = proxyRows.map(proxy => {
+    const cache = proxy.scryfall_id
+      ? db.prepare('SELECT * FROM card_cache WHERE scryfall_id = ?').get(proxy.scryfall_id)
+      : null;
+    return {
+      id: proxy.id, scryfall_id: proxy.scryfall_id, name: proxy.name,
+      deck_id: proxy.deck_id, foil: proxy.foil, quantity: proxy.quantity,
+      ids: [proxy.id], copies: [], groups: [], is_proxy: true,
+      set_code: cache?.set_code ?? null, set_name: cache?.set_name ?? null,
+      collector_number: cache?.collector_number ?? null,
+      image_uri: cache?.image_uri ?? null, image_back: cache?.image_back ?? null,
+      mana_cost: cache?.mana_cost ?? null, type_line: cache?.type_line ?? null,
+      oracle_text: cache?.oracle_text ?? null,
+      colors: cache?.colors ?? null, color_identity: cache?.color_identity ?? null,
+      rarity: cache?.rarity ?? null,
+      prices_usd: cache?.prices_usd ?? null,
+      prices_usd_foil: cache?.prices_usd_foil ?? null,
+      prices_usd_etched: cache?.prices_usd_etched ?? null,
+    };
+  });
+
+  const allCards = [...grouped, ...proxies];
+
+  // Build name → count map including proxies (for violation checks)
   const nameCounts = {};
-  for (const card of grouped) {
+  for (const card of allCards) {
     const key = card.name.toLowerCase();
     nameCounts[key] = (nameCounts[key] || 0) + card.quantity;
   }
 
-  const BASIC_NAMES = new Set(['plains','island','swamp','mountain','forest','wastes','snow-covered plains','snow-covered island','snow-covered swamp','snow-covered mountain','snow-covered forest']);
-  const isBasic = (card) => {
-    if (card.type_line?.startsWith('Basic Land')) return true;
-    // Reversible basics have name "Plains // Plains" — check each face name
-    const names = (card.name || '').split('//').map(n => n.trim().toLowerCase());
-    return names.every(n => BASIC_NAMES.has(n));
-  };
-
-  const withViolations = grouped.map(card => {
+  const withViolations = allCards.map(card => {
     const violations = [];
     const nameKey = card.name.toLowerCase();
 
     if (deck.type === 'binder') {
-      // Binders have no format rules
+      // no rules
     } else if (format === 'commander') {
-      if (!isBasic(card) && nameCounts[nameKey] > 1) {
+      if (!isBasicCard(card) && nameCounts[nameKey] > 1) {
         violations.push({ type: 'singleton', message: 'More than 1 copy (Commander singleton rule)' });
       }
-      if (deckColors.length > 0 && !isBasic(card)) {
+      if (deckColors.length > 0 && !isBasicCard(card)) {
         const ci = card.color_identity ? JSON.parse(card.color_identity) : [];
         if (!ci.every(c => deckColors.includes(c))) {
           violations.push({ type: 'color_identity', message: 'Outside commander color identity' });
         }
       }
     } else if (format === 'pauper') {
-      if (!isBasic(card) && nameCounts[nameKey] > 4) {
+      if (!isBasicCard(card) && nameCounts[nameKey] > 4) {
         violations.push({ type: 'copy_limit', message: 'More than 4 copies' });
       }
       if (card.rarity && card.rarity !== 'common') {
         violations.push({ type: 'rarity', message: `Not a common (${card.rarity})` });
       }
     } else if (['standard', 'pioneer', 'modern', 'legacy', 'vintage'].includes(format)) {
-      if (!isBasic(card) && nameCounts[nameKey] > 4) {
+      if (!isBasicCard(card) && nameCounts[nameKey] > 4) {
         violations.push({ type: 'copy_limit', message: 'More than 4 copies' });
       }
     }
@@ -927,14 +971,77 @@ app.get('/api/decks/:id/cards', (req, res) => {
     return { ...card, violations };
   });
 
-  const totalCards    = grouped.reduce((s, c) => s + c.quantity, 0);
+  const totalOwned     = grouped.reduce((s, c) => s + c.quantity, 0);
+  const totalProxy     = proxies.reduce((s, p) => s + p.quantity, 0);
+  const totalCards     = totalOwned + totalProxy;
   const violationCount = withViolations.reduce((s, c) => s + c.violations.length, 0);
   const sizeLimit      = SIZE_LIMITS[format] ?? null;
 
   res.json({
-    summary: { total: totalCards, sizeLimit, violations: violationCount },
+    summary: { total: totalCards, proxies: totalProxy, sizeLimit, violations: violationCount },
     cards:   withViolations,
   });
+});
+
+// ── Proxy CRUD ────────────────────────────────────────────────────────────────
+app.post('/api/decks/:id/proxies', (req, res) => {
+  const deckId = parseInt(req.params.id, 10);
+  const { scryfall_card, foil, quantity = 1 } = req.body;
+  if (!scryfall_card?.name) return res.status(400).json({ error: 'scryfall_card with name is required' });
+
+  // Ensure card is in cache
+  if (scryfall_card.id) {
+    const existing = db.prepare('SELECT 1 FROM card_cache WHERE scryfall_id = ?').get(scryfall_card.id);
+    if (!existing) db.prepare(`
+      INSERT OR IGNORE INTO card_cache
+        (scryfall_id, name, set_code, set_name, collector_number, image_uri, image_back,
+         mana_cost, type_line, oracle_text, colors, color_identity, full_art, rarity,
+         prices_usd, prices_usd_foil, prices_usd_etched, foil_only, cached_at)
+      VALUES
+        (@scryfall_id, @name, @set_code, @set_name, @collector_number, @image_uri, @image_back,
+         @mana_cost, @type_line, @oracle_text, @colors, @color_identity, @full_art, @rarity,
+         @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, datetime('now'))
+    `).run(cardToRow(scryfall_card));
+  }
+
+  const isFoil = foil ? 1 : 0;
+  const qty    = Math.max(1, parseInt(quantity, 10) || 1);
+
+  // Upsert: if same card+foil already proxied in this deck, increment quantity
+  const existing = db.prepare(
+    'SELECT id, quantity FROM deck_proxies WHERE deck_id = ? AND name = ? AND foil = ?'
+  ).get(deckId, scryfall_card.name, isFoil);
+
+  let proxyId;
+  if (existing) {
+    db.prepare('UPDATE deck_proxies SET quantity = ? WHERE id = ?').run(existing.quantity + qty, existing.id);
+    proxyId = existing.id;
+  } else {
+    const r = db.prepare(
+      'INSERT INTO deck_proxies (deck_id, scryfall_id, name, foil, quantity) VALUES (?, ?, ?, ?, ?)'
+    ).run(deckId, scryfall_card.id ?? null, scryfall_card.name, isFoil, qty);
+    proxyId = r.lastInsertRowid;
+  }
+
+  res.status(201).json({ id: proxyId });
+});
+
+app.patch('/api/decks/:id/proxies/:proxyId', (req, res) => {
+  const proxyId = parseInt(req.params.proxyId, 10);
+  const { quantity } = req.body;
+  if (quantity === undefined) return res.status(400).json({ error: 'quantity is required' });
+  const qty = parseInt(quantity, 10);
+  if (qty <= 0) {
+    db.prepare('DELETE FROM deck_proxies WHERE id = ?').run(proxyId);
+  } else {
+    db.prepare('UPDATE deck_proxies SET quantity = ? WHERE id = ?').run(qty, proxyId);
+  }
+  res.json({ ok: true });
+});
+
+app.delete('/api/decks/:id/proxies/:proxyId', (req, res) => {
+  db.prepare('DELETE FROM deck_proxies WHERE id = ?').run(parseInt(req.params.proxyId, 10));
+  res.json({ ok: true });
 });
 
 // ── Groups ────────────────────────────────────────────────────────────────────

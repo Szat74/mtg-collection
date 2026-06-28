@@ -15,6 +15,7 @@ export default function ImportView({ decks, refresh, showToast, setView }) {
   const [text, setText] = useState('');
   const [defaultDeck, setDefaultDeck] = useState('');  // deck id or '' or '__new__'
   const [newDeck, setNewDeck] = useState('');
+  const [newLocationType, setNewLocationType] = useState('deck');  // 'deck' or 'binder'
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -29,7 +30,7 @@ export default function ImportView({ decks, refresh, showToast, setView }) {
         const dr = await fetch(`${API}/decks`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: newDeck.trim() }),
+          body: JSON.stringify({ name: newDeck.trim(), type: newLocationType }),
         });
         if (dr.ok) { const d = await dr.json(); deckId = d.id; refresh(); }
       } catch {}
@@ -85,7 +86,25 @@ export default function ImportView({ decks, refresh, showToast, setView }) {
               extraOptions={[{ value: '__new__', label: '+ New location…', isAction: true }]}
             />
             {defaultDeck === '__new__' && (
-              <input placeholder="Deck name" value={newDeck} onChange={e => setNewDeck(e.target.value)} />
+              <div className="new-location-fields">
+                <div className="new-location-type">
+                  <label>
+                    <input type="radio" name="newLocationType" value="deck"
+                      checked={newLocationType === 'deck'} onChange={() => setNewLocationType('deck')} />
+                    {' '}Deck
+                  </label>
+                  <label>
+                    <input type="radio" name="newLocationType" value="binder"
+                      checked={newLocationType === 'binder'} onChange={() => setNewLocationType('binder')} />
+                    {' '}Binder
+                  </label>
+                </div>
+                <input
+                  placeholder={newLocationType === 'binder' ? 'Binder name' : 'Deck name'}
+                  value={newDeck}
+                  onChange={e => setNewDeck(e.target.value)}
+                />
+              </div>
             )}
             <button className="btn-primary" onClick={runImport} disabled={loading || !text.trim()}>
               {loading ? 'Importing…' : `Import ${text.trim().split('\n').filter(Boolean).length} lines`}
