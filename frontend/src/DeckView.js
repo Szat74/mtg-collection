@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { DeckManager } from './DeckManager';
 
 const API = '/api';
@@ -19,12 +19,24 @@ const TYPE_ORDER = ['Creature', 'Planeswalker', 'Battle', 'Instant', 'Sorcery', 
 const COLOR_ORDER = ['White', 'Blue', 'Black', 'Red', 'Green', 'Multicolor', 'Colorless'];
 const COLOR_NAME = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green' };
 
-function getTypeGroup(type_line) {
-  if (!type_line) return 'Other';
-  for (const t of ['Planeswalker', 'Battle', 'Creature', 'Land', 'Artifact', 'Enchantment', 'Instant', 'Sorcery']) {
-    if (type_line.includes(t)) return t;
-  }
-  return 'Other';
+const TYPE_KEYS = ['Planeswalker', 'Battle', 'Creature', 'Land', 'Artifact', 'Enchantment', 'Instant', 'Sorcery'];
+
+// Returns [{type, primary}] — one entry per distinct type found across all faces.
+// Face 0 is "primary"; additional faces are secondary (flip contributions).
+function getTypeGroups(type_line) {
+  if (!type_line) return [{ type: 'Other', primary: true }];
+  const faces = type_line.split(' // ');
+  const seen = new Set();
+  const result = [];
+  faces.forEach((face, i) => {
+    for (const t of TYPE_KEYS) {
+      if (face.includes(t) && !seen.has(t)) {
+        seen.add(t);
+        result.push({ type: t, primary: i === 0 });
+      }
+    }
+  });
+  return result.length ? result : [{ type: 'Other', primary: true }];
 }
 
 function getColorGroup(color_identity) {
@@ -58,17 +70,30 @@ function sortCards(cards, sortBy) {
 }
 
 function groupCards(cards, groupBy, sortBy) {
-  if (groupBy === 'none') return [{ label: null, cards: sortCards(cards, sortBy) }];
+  if (groupBy === 'none') return [{ label: null, cards: sortCards(cards, sortBy), flipCards: [] }];
   const map = {};
   for (const card of cards) {
-    const label = groupBy === 'type'
-      ? getTypeGroup(card.type_line)
-      : getColorGroup(card.color_identity);
-    if (!map[label]) map[label] = [];
-    map[label].push(card);
+    if (groupBy === 'type') {
+      const groups = getTypeGroups(card.type_line);
+      // If all faces share the same type, it's a pure card in one group
+      const allSame = groups.every(g => g.type === groups[0].type);
+      groups.forEach(({ type, primary }) => {
+        if (!map[type]) map[type] = { pure: [], flip: [] };
+        if (primary || allSame) map[type].pure.push(card);
+        else map[type].flip.push(card);
+      });
+    } else {
+      const label = getColorGroup(card.color_identity);
+      if (!map[label]) map[label] = { pure: [], flip: [] };
+      map[label].pure.push(card);
+    }
   }
   const order = groupBy === 'type' ? TYPE_ORDER : COLOR_ORDER;
-  return order.filter(l => map[l]).map(l => ({ label: l, cards: sortCards(map[l], sortBy) }));
+  return order.filter(l => map[l]).map(l => ({
+    label: l,
+    cards:     sortCards(map[l].pure, sortBy),
+    flipCards: sortCards(map[l].flip, sortBy),
+  }));
 }
 
 // ── Components ────────────────────────────────────────────────────────────────
@@ -90,9 +115,11 @@ function ColorPips({ colors }) {
   );
 }
 
-function DeckCardTile({ card }) {
+function DeckCardTile({ card, onRemove }) {
+  const [flipped, setFlipped] = useState(false);
   const isFoil  = !!card.foil;
-  const imgSrc  = card.image_uri ?? card.image_back ?? null;
+  const hasBack = !!card.image_back;
+  const imgSrc  = flipped && hasBack ? card.image_back : (card.image_uri ?? card.image_back ?? null);
   const rawPrice = isFoil
     ? (card.prices_usd_foil ?? card.prices_usd_etched ?? card.prices_usd)
     : (card.prices_usd ?? card.prices_usd_foil ?? card.prices_usd_etched);
@@ -101,16 +128,18 @@ function DeckCardTile({ card }) {
 
   return (
     <div className={`card-tile dv-card-tile ${isFoil ? 'foil' : ''} ${hasViolations ? 'has-violation' : ''}`}>
-      {hasViolations && (
-        <div className="dv-violation-badges">
-          {card.violations.map((v, i) => (
-            <span key={i} className="dv-violation-badge" title={v.message}>
-              {VIOLATION_LABELS[v.type] ?? v.type}
-            </span>
-          ))}
-        </div>
+      <div className="dv-violation-badges">
+        {hasViolations && card.violations.map((v, i) => (
+          <span key={i} className="dv-violation-badge" title={v.message}>
+            {VIOLATION_LABELS[v.type] ?? v.type}
+          </span>
+        ))}
+        {hasBack && <span className="flip-hint" title="Click to flip">↻</span>}
+      </div>
+      {onRemove && (
+        <button className="dv-tile-remove" onClick={e => { e.stopPropagation(); onRemove(card); }} title="Remove from deck">✕</button>
       )}
-      <div className="card-img-wrap">
+      <div className="card-img-wrap" onClick={() => hasBack && setFlipped(f => !f)}>
         {imgSrc
           ? <img src={imgSrc} alt={card.name} loading="lazy" />
           : <div className="card-no-img">{card.name}</div>
@@ -131,17 +160,31 @@ function DeckCardTile({ card }) {
   );
 }
 
-function DeckListRow({ card }) {
+function DeckListRow({ card, onRemove }) {
   const [expanded, setExpanded] = useState(false);
+  const [flipped, setFlipped]   = useState(false);
+  const [expandUp, setExpandUp] = useState(false);
+  const rowRef = useRef(null);
   const isFoil        = !!card.foil;
-  const imgSrc        = card.image_uri ?? card.image_back ?? null;
+  const hasBack       = !!card.image_back;
+  const imgSrc        = flipped && hasBack ? card.image_back : (card.image_uri ?? card.image_back ?? null);
   const hasViolations = card.violations?.length > 0;
   const ci = Array.isArray(card.color_identity)
     ? card.color_identity
     : (card.color_identity ? JSON.parse(card.color_identity) : []);
 
+  function handleNameClick() {
+    if (!imgSrc) return;
+    if (!expanded && rowRef.current) {
+      const rect = rowRef.current.getBoundingClientRect();
+      // card image ~320px tall + optional flip button
+      setExpandUp(rect.bottom + 340 > window.innerHeight);
+    }
+    setExpanded(e => !e);
+  }
+
   return (
-    <li className={`dv-list-row ${isFoil ? 'dv-list-row--foil' : ''}`} onMouseLeave={() => setExpanded(false)}>
+    <li ref={rowRef} className={`dv-list-row ${isFoil ? 'dv-list-row--foil' : ''}`} onMouseLeave={() => setExpanded(false)}>
       {/* Hover preview (only when not expanded) */}
       {imgSrc && !expanded && (
         <div className="dv-list-hover-img">
@@ -170,7 +213,7 @@ function DeckListRow({ card }) {
       {/* Name — click to toggle image */}
       <span
         className={`dv-list-name ${imgSrc ? 'dv-list-name--clickable' : ''}`}
-        onClick={() => imgSrc && setExpanded(e => !e)}
+        onClick={handleNameClick}
       >
         {card.name}
       </span>
@@ -182,21 +225,29 @@ function DeckListRow({ card }) {
         {hasViolations && (
           <span className="dv-list-violation" title={card.violations.map(v => v.message).join('; ')}>⚠</span>
         )}
+        {onRemove && (
+          <button className="dv-list-remove" onClick={() => onRemove(card)} title="Remove from deck">✕</button>
+        )}
       </span>
 
       {/* Expanded image */}
       {expanded && imgSrc && (
-        <div className="dv-list-expanded-img" onClick={() => setExpanded(false)}>
-          <img src={imgSrc} alt={card.name} />
+        <div className={`dv-list-expanded-img${expandUp ? ' dv-list-expanded-img--up' : ''}`}>
+          <img src={imgSrc} alt={card.name} onClick={() => setExpanded(false)} />
+          {hasBack && (
+            <button className="dv-list-flip-btn" onClick={() => setFlipped(f => !f)} title="Flip card">↻ Flip</button>
+          )}
         </div>
       )}
     </li>
   );
 }
 
-function CollapsibleGroup({ label, cards, groupBy, viewMode }) {
+function CollapsibleGroup({ label, cards, flipCards = [], groupBy, viewMode, onRemove }) {
   const [open, setOpen] = useState(true);
-  const total = cards.reduce((s, c) => s + (c.quantity || 1), 0);
+  const pureTotal = cards.reduce((s, c) => s + (c.quantity || 1), 0);
+  const flipTotal = flipCards.reduce((s, c) => s + (c.quantity || 1), 0);
+  const countLabel = flipTotal > 0 ? `${pureTotal} (${pureTotal + flipTotal})` : `${pureTotal}`;
 
   const groupIcon = groupBy === 'color' ? (
     label === 'White'      ? <span style={{ color: '#d4c98e' }}>W</span> :
@@ -214,15 +265,20 @@ function CollapsibleGroup({ label, cards, groupBy, viewMode }) {
         <span className="dv-group-chevron">{open ? '▾' : '▸'}</span>
         {groupIcon && <span className="dv-group-icon">{groupIcon}</span>}
         <span className="dv-group-label">{label}</span>
-        <span className="dv-group-count">{total}</span>
+        <span className="dv-group-count">{countLabel}</span>
       </div>
       {open && (viewMode === 'grid' ? (
         <div className="card-grid dv-card-grid">
-          {cards.map(card => <DeckCardTile key={card.ids[0]} card={card} />)}
+          {cards.map(card => <DeckCardTile key={card.ids[0]} card={card} onRemove={onRemove} />)}
+          {flipCards.map(card => <DeckCardTile key={`flip-${card.ids[0]}`} card={card} onRemove={onRemove} />)}
         </div>
       ) : (
         <ul className="dv-list-cards">
-          {cards.map(card => <DeckListRow key={card.ids[0]} card={card} />)}
+          {cards.map(card => <DeckListRow key={card.ids[0]} card={card} onRemove={onRemove} />)}
+          {flipCards.length > 0 && (
+            <li className="dv-flip-divider">↻ also plays as {label.toLowerCase()}</li>
+          )}
+          {flipCards.map(card => <DeckListRow key={`flip-${card.ids[0]}`} card={card} onRemove={onRemove} />)}
         </ul>
       ))}
     </div>
@@ -276,10 +332,19 @@ export default function DeckView({ decks, refresh, showToast }) {
   const [selectedId, setSelectedId] = useState(null);
   const [deckData, setDeckData]     = useState(null);
   const [loading, setLoading]       = useState(false);
-  const [viewMode, setViewMode]     = useState('grid');   // 'grid' | 'list'
-  const [groupBy, setGroupBy]       = useState('type');   // 'none' | 'type' | 'color'
-  const [sortBy, setSortBy]         = useState('name');   // 'name' | 'cmc'
-  const [cmdImages]                 = useState({});
+  const [viewMode, setViewMode]     = useState('grid');
+  const [groupBy, setGroupBy]       = useState('type');
+  const [sortBy, setSortBy]         = useState('name');
+
+  // Add-card panel
+  const [showAdd, setShowAdd]           = useState(false);
+  const [addQuery, setAddQuery]         = useState('');
+  const [addResults, setAddResults]     = useState([]);
+  const [addPrintings, setAddPrintings] = useState([]);
+  const [addSelected, setAddSelected]   = useState(null);
+  const [addFoil, setAddFoil]           = useState(false);
+  const [addLoading, setAddLoading]     = useState(false);
+  const addDebounce = useRef(null);
 
   const selectedDeck = decks.find(d => d.id === selectedId) ?? null;
 
@@ -310,6 +375,133 @@ export default function DeckView({ decks, refresh, showToast }) {
   const groups = deckData?.cards?.length
     ? groupCards(deckData.cards, groupBy, sortBy)
     : [];
+
+  const reloadDeck = useCallback(() => {
+    if (!selectedId) return;
+    fetch(`${API}/decks/${selectedId}/cards`)
+      .then(r => r.json())
+      .then(data => setDeckData(data))
+      .catch(() => {});
+  }, [selectedId]);
+
+  // ── Add-panel search ────────────────────────────────────────────────────────
+  const parseSetNum = (q) => {
+    const m = q.trim().match(/^([a-zA-Z0-9]{2,6})\s+#?(\d+[a-zA-Z]?)$/);
+    return m ? { set: m[1], num: m[2] } : null;
+  };
+
+  const selectAddCard = (card) => {
+    setAddSelected(card);
+    setAddFoil(!card.prices?.usd && !!(card.prices?.usd_foil || card.prices?.usd_etched));
+  };
+
+  const handleAddQuery = (v) => {
+    setAddQuery(v);
+    setAddSelected(null);
+    setAddPrintings([]);
+    setAddResults([]);
+    clearTimeout(addDebounce.current);
+    const parsed = parseSetNum(v);
+    if (parsed) {
+      addDebounce.current = setTimeout(async () => {
+        setAddLoading(true);
+        try {
+          const res = await fetch(`${API}/scryfall/card/${encodeURIComponent(parsed.set)}/${encodeURIComponent(parsed.num)}`);
+          if (res.ok) { const c = await res.json(); setAddPrintings([c]); selectAddCard(c); setAddQuery(c.name); }
+          else showToast(`No card found for ${parsed.set.toUpperCase()} #${parsed.num}`, 'error');
+        } catch { showToast('Lookup failed', 'error'); }
+        setAddLoading(false);
+      }, 400);
+    } else if (v.length >= 2) {
+      addDebounce.current = setTimeout(async () => {
+        setAddLoading(true);
+        try {
+          const res = await fetch(`${API}/search?q=${encodeURIComponent(v)}`);
+          const data = await res.json();
+          setAddResults(data.data || []);
+        } catch { setAddResults([]); }
+        setAddLoading(false);
+      }, 300);
+    }
+  };
+
+  const selectAddName = async (card) => {
+    setAddResults([]);
+    setAddQuery(card.name);
+    setAddLoading(true);
+    try {
+      const res = await fetch(`${API}/printings/${encodeURIComponent(card.name)}`);
+      const data = await res.json();
+      const prints = data.data || [];
+      setAddPrintings(prints);
+      if (prints.length > 0) selectAddCard(prints[0]);
+    } catch { showToast('Could not load printings', 'error'); }
+    setAddLoading(false);
+  };
+
+  const handleAddCard = async () => {
+    if (!addSelected || !selectedId) return;
+    setAddLoading(true);
+    const res = await fetch(`${API}/cards`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scryfall_card: addSelected, foil: addFoil, deck_id: selectedId }),
+    });
+    if (res.ok) {
+      showToast(`Added ${addSelected.name}`);
+      reloadDeck();
+      refresh();
+      setAddQuery(''); setAddResults([]); setAddPrintings([]); setAddSelected(null); setAddFoil(false);
+    } else {
+      const err = await res.json().catch(() => ({}));
+      showToast(err.error || 'Failed to add card', 'error');
+    }
+    setAddLoading(false);
+  };
+
+  // ── Remove one copy from deck (unassign) ────────────────────────────────────
+  const handleRemove = useCallback(async (card) => {
+    const id = card.ids[0];
+    const res = await fetch(`${API}/cards/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deck_id: null }),
+    });
+    if (res.ok) {
+      showToast(`Removed ${card.name} from deck`);
+      reloadDeck();
+      refresh();
+    } else {
+      showToast('Failed to remove card', 'error');
+    }
+  }, [reloadDeck, refresh, showToast]);
+
+  function exportDeck() {
+    if (!deckData?.cards?.length || !selectedDeck) return;
+    const lines = [];
+    const commanderIds = [selectedDeck.commander_id, selectedDeck.partner_id].filter(Boolean);
+    const commanders = deckData.cards.filter(c => c.ids.some(id => commanderIds.includes(id)));
+    const mainboard  = deckData.cards.filter(c => !c.ids.some(id => commanderIds.includes(id)));
+    const fmt = (c, qty = c.quantity) => {
+      const set = c.set_code ? ` (${c.set_code.toUpperCase()})` : '';
+      const num = c.collector_number ? ` ${c.collector_number}` : '';
+      return `${qty} ${c.name}${set}${num}`;
+    };
+    if (commanders.length) {
+      lines.push('// Commander');
+      commanders.forEach(c => lines.push(fmt(c, 1)));
+      lines.push('');
+      lines.push('// Deck');
+    }
+    mainboard.forEach(c => lines.push(fmt(c)));
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `${selectedDeck.name.replace(/[^a-z0-9]/gi, '_')}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   return (
     <div className={`dv-root${selectedId ? ' dv-has-selection' : ''}`}>
@@ -381,6 +573,14 @@ export default function DeckView({ decks, refresh, showToast }) {
                       title="Grouped list"
                     >≡ List</button>
                     <span className="dv-toggle-divider" />
+                    <button className="dv-toggle-btn" onClick={exportDeck} title="Export decklist as text">⬇ Export</button>
+                    <span className="dv-toggle-divider" />
+                    <button
+                      className={`dv-toggle-btn${showAdd ? ' active' : ''}`}
+                      onClick={() => { setShowAdd(s => !s); setAddQuery(''); setAddResults([]); setAddPrintings([]); setAddSelected(null); }}
+                      title="Add card to deck"
+                    >+ Add</button>
+                    <span className="dv-toggle-divider" />
                     <select
                       className="dv-group-select"
                       value={groupBy}
@@ -421,28 +621,96 @@ export default function DeckView({ decks, refresh, showToast }) {
             {/* Violations banner */}
             {deckData && <ViolationsBanner summary={deckData.summary} cards={deckData.cards ?? []} />}
 
+            {/* Add-card panel */}
+            {showAdd && (
+              <div className="dv-add-panel">
+                <div className="dv-add-search-row">
+                  <input
+                    className="dv-add-input"
+                    placeholder="Card name or SET #number…"
+                    value={addQuery}
+                    onChange={e => handleAddQuery(e.target.value)}
+                    autoFocus
+                  />
+                  {addLoading && <span className="dv-add-spinner">…</span>}
+                </div>
+
+                {/* Name results dropdown */}
+                {addResults.length > 0 && (
+                  <ul className="dv-add-results">
+                    {addResults.map(c => (
+                      <li key={c.id} className="dv-add-result" onClick={() => selectAddName(c)}>
+                        {c.name}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {/* Printings picker */}
+                {addPrintings.length > 0 && (
+                  <div className="dv-add-printings">
+                    {addPrintings.map(p => {
+                      const label = `${(p.set_name || p.set || '').slice(0, 24)} #${p.collector_number}`;
+                      return (
+                        <button
+                          key={p.id}
+                          className={`dv-add-printing-btn${addSelected?.id === p.id ? ' active' : ''}`}
+                          onClick={() => selectAddCard(p)}
+                        >{label}</button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Preview + confirm row */}
+                {addSelected && (
+                  <div className="dv-add-confirm-row">
+                    {(addSelected.image_uris?.normal ?? addSelected.card_faces?.[0]?.image_uris?.normal) && (
+                      <img
+                        className="dv-add-preview"
+                        src={addSelected.image_uris?.normal ?? addSelected.card_faces?.[0]?.image_uris?.normal}
+                        alt={addSelected.name}
+                      />
+                    )}
+                    <div className="dv-add-confirm-actions">
+                      <label className="dv-add-foil-label">
+                        <input type="checkbox" checked={addFoil} onChange={e => setAddFoil(e.target.checked)} />
+                        Foil
+                      </label>
+                      <button className="dv-add-confirm-btn" onClick={handleAddCard} disabled={addLoading}>
+                        Add to deck
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Cards */}
             {loading ? (
               <div className="dv-loading">Loading cards…</div>
             ) : !deckData ? (
               <div className="dv-loading" style={{ color: 'var(--danger)' }}>Could not load deck cards. Make sure the backend is running.</div>
             ) : deckData.cards.length === 0 ? (
-              <div className="dv-empty-detail">No cards assigned to this deck yet.</div>
+              <div className="dv-empty-detail">
+                No cards yet.{' '}
+                <button className="dv-add-inline-btn" onClick={() => setShowAdd(true)}>+ Add a card</button>
+              </div>
             ) : (
               <div className={viewMode === 'grid' ? 'dv-grid-view' : 'dv-list-view'}>
-                {groups.map(({ label, cards }) =>
+                {groups.map(({ label, cards, flipCards }) =>
                   label === null ? (
                     viewMode === 'grid' ? (
                       <div key="all" className="card-grid dv-card-grid">
-                        {cards.map(card => <DeckCardTile key={card.ids[0]} card={card} />)}
+                        {cards.map(card => <DeckCardTile key={card.ids[0]} card={card} onRemove={handleRemove} />)}
                       </div>
                     ) : (
                       <ul key="all" className="dv-list-cards">
-                        {cards.map(card => <DeckListRow key={card.ids[0]} card={card} />)}
+                        {cards.map(card => <DeckListRow key={card.ids[0]} card={card} onRemove={handleRemove} />)}
                       </ul>
                     )
                   ) : (
-                    <CollapsibleGroup key={label} label={label} cards={cards} groupBy={groupBy} viewMode={viewMode} />
+                    <CollapsibleGroup key={label} label={label} cards={cards} flipCards={flipCards} groupBy={groupBy} viewMode={viewMode} onRemove={handleRemove} />
                   )
                 )}
               </div>
@@ -533,11 +801,22 @@ export default function DeckView({ decks, refresh, showToast }) {
           position: absolute; left: 0; top: calc(100% + 4px); z-index: 200;
           width: 220px; border-radius: 10px; overflow: hidden;
           box-shadow: 0 8px 32px rgba(0,0,0,0.7); border: 1px solid var(--border);
-          cursor: pointer;
         }
-        .dv-list-expanded-img img { width: 100%; display: block; }
+        .dv-list-expanded-img--up { top: auto; bottom: calc(100% + 4px); }
+        .dv-list-expanded-img img { width: 100%; display: block; cursor: pointer; }
+        .dv-list-flip-btn {
+          display: block; width: 100%; padding: 5px 0;
+          background: var(--bg2); border: none; border-top: 1px solid var(--border);
+          color: var(--text); font-size: 12px; cursor: pointer;
+        }
+        .dv-list-flip-btn:hover { background: var(--bg3); }
         .dv-list-right {
           display: flex; align-items: center; gap: 5px; flex-shrink: 0;
+        }
+        .dv-flip-divider {
+          list-style: none; padding: 3px 10px; font-size: 10px;
+          color: var(--text-dim); font-style: italic;
+          border-top: 1px dashed var(--border); margin-top: 2px;
         }
         .dv-list-foil { font-size: 10px; color: var(--foil-a); }
         .dv-list-qty {
@@ -556,6 +835,75 @@ export default function DeckView({ decks, refresh, showToast }) {
         }
         .dv-list-hover-img img { width: 100%; display: block; }
         .dv-list-row:hover .dv-list-hover-img { display: block; }
+
+        /* ── Remove buttons ──────────────────────────────── */
+        .dv-tile-remove {
+          position: absolute; top: 5px; left: 5px; z-index: 10;
+          background: rgba(0,0,0,0.65); color: #fff; border: none;
+          width: 20px; height: 20px; border-radius: 50%; font-size: 10px;
+          cursor: pointer; display: none; align-items: center; justify-content: center;
+          line-height: 1;
+        }
+        .dv-card-tile:hover .dv-tile-remove { display: flex; }
+        .dv-tile-remove:hover { background: var(--danger); }
+        .dv-list-remove {
+          background: none; border: none; color: var(--text-dim);
+          font-size: 12px; cursor: pointer; padding: 0 2px; opacity: 0;
+          transition: opacity 0.1s;
+        }
+        .dv-list-row:hover .dv-list-remove { opacity: 1; }
+        .dv-list-remove:hover { color: var(--danger); }
+
+        /* ── Add-card panel ──────────────────────────────── */
+        .dv-add-panel {
+          border: 1px solid var(--border); border-radius: 8px;
+          background: var(--bg2); padding: 12px; margin-bottom: 12px;
+          display: flex; flex-direction: column; gap: 10px;
+        }
+        .dv-add-search-row { display: flex; align-items: center; gap: 8px; }
+        .dv-add-input {
+          flex: 1; background: var(--bg3); border: 1px solid var(--border);
+          color: var(--text); font-size: 13px; font-family: var(--font-body);
+          padding: 6px 10px; border-radius: 6px; outline: none;
+        }
+        .dv-add-input:focus { border-color: var(--accent); }
+        .dv-add-spinner { color: var(--text-dim); font-size: 13px; }
+        .dv-add-results {
+          list-style: none; margin: 0; padding: 0;
+          border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+          max-height: 200px; overflow-y: auto;
+        }
+        .dv-add-result {
+          padding: 7px 12px; font-size: 13px; cursor: pointer;
+          border-bottom: 1px solid var(--border);
+        }
+        .dv-add-result:last-child { border-bottom: none; }
+        .dv-add-result:hover { background: var(--bg3); color: var(--gold); }
+        .dv-add-printings {
+          display: flex; flex-wrap: wrap; gap: 5px;
+        }
+        .dv-add-printing-btn {
+          background: var(--bg3); border: 1px solid var(--border); color: var(--text-dim);
+          font-size: 11px; font-family: var(--font-body); padding: 3px 8px;
+          border-radius: 4px; cursor: pointer;
+        }
+        .dv-add-printing-btn:hover { border-color: var(--accent); color: var(--text); }
+        .dv-add-printing-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(123,79,200,0.12); }
+        .dv-add-confirm-row { display: flex; align-items: flex-start; gap: 12px; }
+        .dv-add-preview { width: 80px; border-radius: 5px; flex-shrink: 0; }
+        .dv-add-confirm-actions { display: flex; flex-direction: column; gap: 8px; justify-content: center; }
+        .dv-add-foil-label { display: flex; align-items: center; gap: 5px; font-size: 13px; color: var(--text-dim); cursor: pointer; }
+        .dv-add-confirm-btn {
+          background: var(--accent); color: #fff; border: none;
+          font-size: 13px; font-family: var(--font-body); padding: 6px 16px;
+          border-radius: 6px; cursor: pointer;
+        }
+        .dv-add-confirm-btn:hover { opacity: 0.85; }
+        .dv-add-confirm-btn:disabled { opacity: 0.5; cursor: default; }
+        .dv-add-inline-btn {
+          background: none; border: none; color: var(--accent);
+          font-size: 13px; cursor: pointer; text-decoration: underline;
+        }
       `}</style>
     </div>
   );

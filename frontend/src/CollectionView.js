@@ -1,9 +1,82 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 
 const API = '/api';
 const RARITY_COLOR = { common: '#c0c0c0', uncommon: '#a8c4d4', rare: '#d4af37', mythic: '#e85c2e', special: '#c879ff' };
 
 const COLOR_NAMES = { W: 'White', U: 'Blue', B: 'Black', R: 'Red', G: 'Green' };
+
+// ── Multi-select filter component ────────────────────────────────────────────
+function MultiSelect({ placeholder, options, selected, onChange }) {
+  // options: [{value, label}]  selected: Set of values
+  const [query, setQuery]   = useState('');
+  const [open, setOpen]     = useState(false);
+  const ref                 = useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const filtered = useMemo(() =>
+    options.filter(o => o.label.toLowerCase().includes(query.toLowerCase())),
+    [options, query]
+  );
+
+  const toggle = (value) => {
+    const next = new Set(selected);
+    next.has(value) ? next.delete(value) : next.add(value);
+    onChange(next);
+  };
+
+  const selectedOptions = options.filter(o => selected.has(o.value));
+
+  return (
+    <div className="ms-root" ref={ref}>
+      <div className={`ms-box${open ? ' ms-open' : ''}${selected.size > 0 ? ' ms-active' : ''}`} onClick={() => setOpen(o => !o)}>
+        <div className="ms-chips">
+          {selectedOptions.length === 0
+            ? <span className="ms-placeholder">{placeholder}</span>
+            : selectedOptions.map(o => (
+                <span key={o.value} className="ms-chip">
+                  {o.label}
+                  <button className="ms-chip-remove" onClick={e => { e.stopPropagation(); toggle(o.value); }}>×</button>
+                </span>
+              ))
+          }
+        </div>
+        <span className="ms-arrow">{open ? '▴' : '▾'}</span>
+      </div>
+      {open && (
+        <div className="ms-dropdown">
+          <input
+            className="ms-search"
+            placeholder="Search…"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            onClick={e => e.stopPropagation()}
+            autoFocus
+          />
+          <ul className="ms-list">
+            {filtered.length === 0
+              ? <li className="ms-empty">No matches</li>
+              : filtered.map(o => (
+                  <li
+                    key={o.value}
+                    className={`ms-option${selected.has(o.value) ? ' ms-selected' : ''}`}
+                    onClick={e => { e.stopPropagation(); toggle(o.value); }}
+                  >
+                    {selected.has(o.value) && <span className="ms-check">✓</span>}
+                    {o.label}
+                  </li>
+                ))
+            }
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ── Land section (compact list for basic lands) ───────────────────────────────
 const LAND_ORDER = ['Plains', 'Island', 'Swamp', 'Mountain', 'Forest', 'Snow-Covered Plains', 'Snow-Covered Island', 'Snow-Covered Swamp', 'Snow-Covered Mountain', 'Snow-Covered Forest'];
@@ -610,10 +683,10 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, onGroupC
 export default function CollectionView({ cards: initialCards, decks, groups, onGroupCreated, refresh, showToast }) {
   const [cards, setCards]               = useState(initialCards);
   const [search, setSearch]             = useState('');
-  const [filterDeck, setFilterDeck]     = useState('');   // deck id (string of int) or ''
-  const [filterGroup, setFilterGroup]   = useState('');   // group id (string of int) or ''
+  const [filterDecks, setFilterDecks]   = useState(new Set());
+  const [filterGroups, setFilterGroups] = useState(new Set());
   const [filterFoil, setFilterFoil]     = useState('');
-  const [filterSet, setFilterSet]       = useState('');
+  const [filterSets, setFilterSets]     = useState(new Set());
   const [filterColors, setFilterColors] = useState(new Set());
 
   const allSets = useMemo(() => {
@@ -627,9 +700,9 @@ export default function CollectionView({ cards: initialCards, decks, groups, onG
   const [order, setOrder]               = useState('desc');
   const [filtersOpen, setFiltersOpen]   = useState(false);
 
-  const hasFilters = !!(filterDeck || filterGroup || filterFoil || filterSet || filterColors.size > 0);
-  const clearAllFilters = () => { setFilterDeck(''); setFilterGroup(''); setFilterFoil(''); setFilterSet(''); setFilterColors(new Set()); };
-  const activeFilterCount = [filterDeck, filterGroup, filterFoil, filterSet].filter(Boolean).length + (filterColors.size > 0 ? 1 : 0);
+  const hasFilters = !!(filterDecks.size || filterGroups.size || filterFoil || filterSets.size || filterColors.size);
+  const clearAllFilters = () => { setFilterDecks(new Set()); setFilterGroups(new Set()); setFilterFoil(''); setFilterSets(new Set()); setFilterColors(new Set()); };
+  const activeFilterCount = [filterDecks.size > 0, filterGroups.size > 0, !!filterFoil, filterSets.size > 0, filterColors.size > 0].filter(Boolean).length;
   const SORT_LABELS = { name: 'Name', prices_usd: 'Price', rarity: 'Rarity', set_name: 'Set', added_at: 'Added' };
   const cycleSort = (field) => {
     if (sort === field) setOrder(o => o === 'asc' ? 'desc' : 'asc');
@@ -643,24 +716,24 @@ export default function CollectionView({ cards: initialCards, decks, groups, onG
   const [bulkGroup, setBulkGroup]         = useState('');   // group id or ''
   const [bulkBusy, setBulkBusy]           = useState(false);
 
-  const applyFilters = async () => {
+  useEffect(() => {
+    const controller = new AbortController();
     const params = {};
-    if (search)                params.search = search;
-    if (filterDeck)            params.deck   = filterDeck;
-    if (filterGroup)           params.group  = filterGroup;
-    if (filterFoil !== '')     params.foil   = filterFoil;
-    if (filterSet)             params.set    = filterSet;
+    if (search)                 params.search = search;
+    if (filterDecks.size > 0)  params.deck   = [...filterDecks].join(',');
+    if (filterGroups.size > 0) params.group  = [...filterGroups].join(',');
+    if (filterFoil !== '')      params.foil   = filterFoil;
+    if (filterSets.size > 0)   params.set    = [...filterSets].join(',');
     if (filterColors.size > 0) params.colors = [...filterColors].join(',');
     params.sort  = sort;
     params.order = order;
-    try {
-      const qs  = new URLSearchParams(params).toString();
-      const res = await fetch(`${API}/cards${qs ? '?' + qs : ''}`);
-      if (res.ok) setCards(await res.json());
-    } catch {}
-  };
-
-  useEffect(() => { applyFilters(); }, [search, filterDeck, filterGroup, filterFoil, filterSet, filterColors, sort, order]);
+    const qs = new URLSearchParams(params).toString();
+    fetch(`${API}/cards${qs ? '?' + qs : ''}`, { signal: controller.signal })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data) setCards(data); })
+      .catch(() => {});
+    return () => controller.abort();
+  }, [search, filterDecks, filterGroups, filterFoil, filterSets, filterColors, sort, order]);
 
   // updatedRows are full collection rows returned by PATCH (with groups: [{id,name}], deck_id)
   const handleUpdate = (updatedRows) => {
@@ -834,23 +907,29 @@ export default function CollectionView({ cards: initialCards, decks, groups, onG
         </div>
 
         <div className={`filter-controls${filtersOpen ? ' filter-controls-open' : ''}`}>
-          <select className={filterDeck ? 'filter-active' : ''} value={filterDeck} onChange={e => setFilterDeck(e.target.value)}>
-            <option value="">All Decks</option>
-            {decks.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-          </select>
-          <select className={filterGroup ? 'filter-active' : ''} value={filterGroup} onChange={e => setFilterGroup(e.target.value)}>
-            <option value="">All Groups</option>
-            {(groups || []).map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-          </select>
+          <MultiSelect
+            placeholder="All Decks"
+            options={decks.map(d => ({ value: String(d.id), label: d.name }))}
+            selected={filterDecks}
+            onChange={setFilterDecks}
+          />
+          <MultiSelect
+            placeholder="All Groups"
+            options={(groups || []).map(g => ({ value: String(g.id), label: g.name }))}
+            selected={filterGroups}
+            onChange={setFilterGroups}
+          />
           <select className={filterFoil ? 'filter-active' : ''} value={filterFoil} onChange={e => setFilterFoil(e.target.value)}>
             <option value="">All Finishes</option>
             <option value="true">Foil only</option>
             <option value="false">Non-foil only</option>
           </select>
-          <select className={filterSet ? 'filter-active' : ''} value={filterSet} onChange={e => setFilterSet(e.target.value)}>
-            <option value="">All Sets</option>
-            {allSets.map(([code, name]) => <option key={code} value={code}>{name}</option>)}
-          </select>
+          <MultiSelect
+            placeholder="All Sets"
+            options={allSets.map(([code, name]) => ({ value: code, label: name }))}
+            selected={filterSets}
+            onChange={setFilterSets}
+          />
           <div className="color-filter">
             {[
               { code: 'W', label: 'White', bg: '#f9faf4', color: '#6b6340' },

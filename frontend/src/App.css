@@ -364,6 +364,49 @@ a { color: var(--gold); }
 
 .filter-clear-btn { color: var(--danger) !important; border-color: var(--danger) !important; flex-shrink: 0; }
 
+/* ── MultiSelect ────────────────────────────────────────────────────────────── */
+.ms-root { position: relative; min-width: 140px; }
+.ms-box {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 5px 8px; cursor: pointer; min-height: 36px; user-select: none;
+}
+.ms-box:hover { border-color: var(--gold-dim); }
+.ms-box.ms-open { border-color: var(--gold-dim); }
+.ms-box.ms-active { border-color: var(--accent); }
+.ms-placeholder { color: var(--text-dim); font-size: 0.9rem; flex: 1; }
+.ms-arrow { color: var(--text-dim); font-size: 9px; margin-left: auto; flex-shrink: 0; }
+.ms-chips { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; }
+.ms-chip {
+  display: flex; align-items: center; gap: 3px;
+  background: rgba(123,79,200,0.18); border: 1px solid var(--accent);
+  color: var(--text); font-size: 11px; padding: 1px 6px; border-radius: 10px;
+}
+.ms-chip-remove {
+  background: none; border: none; color: var(--text-dim); cursor: pointer;
+  font-size: 13px; padding: 0; line-height: 1;
+}
+.ms-chip-remove:hover { color: var(--danger); }
+.ms-dropdown {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 300;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5); overflow: hidden;
+}
+.ms-search {
+  width: 100%; box-sizing: border-box;
+  background: var(--bg3); border: none; border-bottom: 1px solid var(--border);
+  color: var(--text); font-size: 0.88rem; padding: 7px 10px; outline: none;
+}
+.ms-list { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; }
+.ms-option {
+  display: flex; align-items: center; gap: 7px;
+  padding: 7px 12px; font-size: 0.88rem; cursor: pointer; color: var(--text-dim);
+}
+.ms-option:hover { background: var(--bg3); color: var(--text); }
+.ms-option.ms-selected { color: var(--text); }
+.ms-check { color: var(--accent); font-size: 11px; width: 12px; flex-shrink: 0; }
+.ms-empty { padding: 8px 12px; font-size: 0.85rem; color: var(--text-dim); }
+
 /* ── Card grid ─────────────────────────────────────────────────────────────── */
 .card-grid {
   display: grid;
@@ -381,7 +424,13 @@ a { color: var(--gold); }
 .card-img-wrap { position: relative; cursor: pointer; background: var(--bg3); }
 .card-img-wrap img { width: 100%; display: block; border-radius: 0; }
 .card-no-img { height: 160px; display: flex; align-items: center; justify-content: center; color: var(--text-dim); padding: 12px; text-align: center; font-size: 0.9rem; }
-.flip-hint { position: absolute; top: 6px; right: 8px; font-size: 1.1rem; opacity: 0.6; }
+.flip-hint {
+  opacity: 0; transition: opacity 0.15s;
+  background: rgba(0,0,0,0.55); color: #fff;
+  padding: 2px 6px; border-radius: 4px; font-size: 13px;
+  pointer-events: none;
+}
+.card-tile:hover .flip-hint { opacity: 1; }
 .foil-badge {
   position: absolute; bottom: 6px; right: 8px;
   background: linear-gradient(90deg, var(--foil-a), var(--foil-b));
@@ -934,7 +983,7 @@ a { color: var(--gold); }
   text-transform: uppercase;
 }
 .dv-qty-badge {
-  position: absolute; bottom: 6px; left: 6px;
+  position: absolute; top: 6px; left: 6px;
   background: rgba(0,0,0,0.65); color: #fff;
   font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
 }

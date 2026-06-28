@@ -186,7 +186,7 @@ function cardToRow(c) {
     image_uri:        c.image_uris?.normal      ?? c.card_faces?.[0]?.image_uris?.normal ?? null,
     image_back:       c.card_faces?.[1]?.image_uris?.normal ?? null,
     mana_cost:        c.mana_cost    ?? null,
-    type_line:        c.type_line    ?? null,
+    type_line:        c.type_line    ?? c.card_faces?.[0]?.type_line ?? null,
     oracle_text:      c.oracle_text  ?? null,
     colors:           c.colors          ? JSON.stringify(c.colors)          : null,
     color_identity:   c.color_identity  ? JSON.stringify(c.color_identity)  : null,
@@ -413,13 +413,23 @@ app.get('/api/cards', (req, res) => {
   `;
   const params = [];
 
-  if (deck != null) {
+  const deckIds  = deck  ? deck.split(',').map(v => parseInt(v, 10)).filter(Boolean) : [];
+  const groupIds = group ? group.split(',').map(v => parseInt(v, 10)).filter(Boolean) : [];
+  const setCodes = set   ? set.split(',').map(v => v.trim().toLowerCase()).filter(Boolean) : [];
+
+  if (deckIds.length === 1) {
     sql += ' JOIN decks d ON d.id = c.deck_id AND d.id = ?';
-    params.push(parseInt(deck, 10));
+    params.push(deckIds[0]);
+  } else if (deckIds.length > 1) {
+    sql += ` JOIN decks d ON d.id = c.deck_id AND d.id IN (${deckIds.map(() => '?').join(',')})`;
+    params.push(...deckIds);
   }
-  if (group != null) {
+  if (groupIds.length === 1) {
     sql += ' JOIN collection_groups cg ON cg.collection_id = c.id AND cg.group_id = ?';
-    params.push(parseInt(group, 10));
+    params.push(groupIds[0]);
+  } else if (groupIds.length > 1) {
+    sql += ` JOIN collection_groups cg ON cg.collection_id = c.id AND cg.group_id IN (${groupIds.map(() => '?').join(',')})`;
+    params.push(...groupIds);
   }
 
   sql += ' WHERE 1=1';
@@ -435,9 +445,12 @@ app.get('/api/cards', (req, res) => {
     sql += ' AND c.foil = ?';
     params.push(foil === 'true' ? 1 : 0);
   }
-  if (set) {
-    sql += ' AND cc.set_code = ?';
-    params.push(set);
+  if (setCodes.length === 1) {
+    sql += ' AND lower(cc.set_code) = ?';
+    params.push(setCodes[0]);
+  } else if (setCodes.length > 1) {
+    sql += ` AND lower(cc.set_code) IN (${setCodes.map(() => '?').join(',')})`;
+    params.push(...setCodes);
   }
   if (colors) {
     const selected = colors.split(',').map(c => c.trim().toUpperCase()).filter(Boolean);
@@ -874,7 +887,13 @@ app.get('/api/decks/:id/cards', (req, res) => {
     nameCounts[key] = (nameCounts[key] || 0) + card.quantity;
   }
 
-  const isBasic = (card) => card.type_line?.startsWith('Basic Land');
+  const BASIC_NAMES = new Set(['plains','island','swamp','mountain','forest','wastes','snow-covered plains','snow-covered island','snow-covered swamp','snow-covered mountain','snow-covered forest']);
+  const isBasic = (card) => {
+    if (card.type_line?.startsWith('Basic Land')) return true;
+    // Reversible basics have name "Plains // Plains" — check each face name
+    const names = (card.name || '').split('//').map(n => n.trim().toLowerCase());
+    return names.every(n => BASIC_NAMES.has(n));
+  };
 
   const withViolations = grouped.map(card => {
     const violations = [];
