@@ -609,11 +609,16 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, onGroupC
             <div className="cv-finish-row">
               <span className="cv-finish-label">Finish</span>
               <div className="cv-finish-toggle">
-                <button type="button" className={`cv-finish-btn${finish === 'normal' ? ' cv-finish-btn--active' : ''}`} onClick={() => setFinish('normal')}>Normal</button>
-                <button type="button" className={`cv-finish-btn${finish === 'foil' ? ' cv-finish-btn--active' : ''}`} onClick={() => setFinish('foil')}>✦ Foil</button>
-                {!!(card.prices_usd_etched || card.etched_only) && (
-                  <button type="button" className={`cv-finish-btn${finish === 'etched' ? ' cv-finish-btn--active cv-finish-btn--etched' : ''}`} onClick={() => setFinish('etched')}>⬡ Etched</button>
-                )}
+                {(() => {
+                  const etchedOnly = !!(card.etched_only || (!card.prices_usd && !card.prices_usd_foil && card.prices_usd_etched));
+                  return (<>
+                    {!etchedOnly && <button type="button" className={`cv-finish-btn${finish === 'normal' ? ' cv-finish-btn--active' : ''}`} onClick={() => setFinish('normal')}>Normal</button>}
+                    {!etchedOnly && <button type="button" className={`cv-finish-btn${finish === 'foil' ? ' cv-finish-btn--active' : ''}`} onClick={() => setFinish('foil')}>✦ Foil</button>}
+                    {!!(card.prices_usd_etched || card.etched_only) && (
+                      <button type="button" className={`cv-finish-btn${finish === 'etched' ? ' cv-finish-btn--active cv-finish-btn--etched' : ''}`} onClick={() => setFinish('etched')}>⬡ Etched</button>
+                    )}
+                  </>);
+                })()}
               </div>
             </div>
 

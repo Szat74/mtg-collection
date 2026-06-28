@@ -256,11 +256,16 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
             <div className="av-finish-row">
               <span className="av-finish-label">Finish</span>
               <div className="av-finish-toggle">
-                <button type="button" className={`av-finish-btn${finish === 'normal' ? ' av-finish-btn--active' : ''}`} onClick={() => setFinish('normal')}>Normal</button>
-                <button type="button" className={`av-finish-btn${finish === 'foil' ? ' av-finish-btn--active' : ''}`} onClick={() => setFinish('foil')}>✦ Foil</button>
-                {!!(selectedCard?.prices?.usd_etched || selectedCard?.etched_only) && (
-                  <button type="button" className={`av-finish-btn${finish === 'etched' ? ' av-finish-btn--active av-finish-btn--etched' : ''}`} onClick={() => setFinish('etched')}>⬡ Etched</button>
-                )}
+                {(() => {
+                  const etchedOnly = !!(selectedCard?.etched_only || (!selectedCard?.prices?.usd && !selectedCard?.prices?.usd_foil && selectedCard?.prices?.usd_etched));
+                  return (<>
+                    {!etchedOnly && <button type="button" className={`av-finish-btn${finish === 'normal' ? ' av-finish-btn--active' : ''}`} onClick={() => setFinish('normal')}>Normal</button>}
+                    {!etchedOnly && <button type="button" className={`av-finish-btn${finish === 'foil' ? ' av-finish-btn--active' : ''}`} onClick={() => setFinish('foil')}>✦ Foil</button>}
+                    {!!(selectedCard?.prices?.usd_etched || selectedCard?.etched_only) && (
+                      <button type="button" className={`av-finish-btn${finish === 'etched' ? ' av-finish-btn--active av-finish-btn--etched' : ''}`} onClick={() => setFinish('etched')}>⬡ Etched</button>
+                    )}
+                  </>);
+                })()}
               </div>
             </div>
 

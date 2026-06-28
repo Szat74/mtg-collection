@@ -696,11 +696,16 @@ export default function DeckView({ decks, refresh, showToast }) {
           )}
           <div className="dv-add-confirm-actions">
             <div className="dv-finish-toggle">
-              <button type="button" className={`dv-finish-btn${addFinish === 'normal' ? ' dv-finish-btn--active' : ''}`} onClick={() => setAddFinish('normal')}>Normal</button>
-              <button type="button" className={`dv-finish-btn${addFinish === 'foil' ? ' dv-finish-btn--active' : ''}`} onClick={() => setAddFinish('foil')}>✦ Foil</button>
-              {!!(addSelected?.prices?.usd_etched || addSelected?.etched_only) && (
-                <button type="button" className={`dv-finish-btn${addFinish === 'etched' ? ' dv-finish-btn--active dv-finish-btn--etched' : ''}`} onClick={() => setAddFinish('etched')}>⬡ Etched</button>
-              )}
+              {(() => {
+                const etchedOnly = !!(addSelected?.etched_only || (!addSelected?.prices?.usd && !addSelected?.prices?.usd_foil && addSelected?.prices?.usd_etched));
+                return (<>
+                  {!etchedOnly && <button type="button" className={`dv-finish-btn${addFinish === 'normal' ? ' dv-finish-btn--active' : ''}`} onClick={() => setAddFinish('normal')}>Normal</button>}
+                  {!etchedOnly && <button type="button" className={`dv-finish-btn${addFinish === 'foil' ? ' dv-finish-btn--active' : ''}`} onClick={() => setAddFinish('foil')}>✦ Foil</button>}
+                  {!!(addSelected?.prices?.usd_etched || addSelected?.etched_only) && (
+                    <button type="button" className={`dv-finish-btn${addFinish === 'etched' ? ' dv-finish-btn--active dv-finish-btn--etched' : ''}`} onClick={() => setAddFinish('etched')}>⬡ Etched</button>
+                  )}
+                </>);
+              })()}
             </div>
             {addMode === 'proxy' && (
               <label className="dv-add-foil-label">
