@@ -86,26 +86,49 @@ export default function ImportView({ decks, refresh, showToast, setView }) {
               extraOptions={[{ value: '__new__', label: '+ New location…', isAction: true }]}
             />
             {defaultDeck === '__new__' && (
-              <div className="new-location-fields">
-                <div className="new-location-type">
-                  <label>
-                    <input type="radio" name="newLocationType" value="deck"
-                      checked={newLocationType === 'deck'} onChange={() => setNewLocationType('deck')} />
-                    {' '}Deck
-                  </label>
-                  <label>
-                    <input type="radio" name="newLocationType" value="binder"
-                      checked={newLocationType === 'binder'} onChange={() => setNewLocationType('binder')} />
-                    {' '}Binder
-                  </label>
+              <div className="iv-new-location">
+                <div className="iv-type-toggle">
+                  <button
+                    type="button"
+                    className={`iv-type-btn${newLocationType === 'deck' ? ' iv-type-btn--active' : ''}`}
+                    onClick={() => setNewLocationType('deck')}
+                  >Deck</button>
+                  <button
+                    type="button"
+                    className={`iv-type-btn${newLocationType === 'binder' ? ' iv-type-btn--active' : ''}`}
+                    onClick={() => setNewLocationType('binder')}
+                  >📒 Binder</button>
                 </div>
                 <input
+                  className="iv-name-input"
                   placeholder={newLocationType === 'binder' ? 'Binder name' : 'Deck name'}
                   value={newDeck}
                   onChange={e => setNewDeck(e.target.value)}
                 />
               </div>
             )}
+            <style>{`
+              .iv-new-location { display: flex; flex-direction: column; gap: 6px; }
+              .iv-type-toggle {
+                display: flex; gap: 6px;
+              }
+              .iv-type-btn {
+                flex: 1; padding: 6px 0; font-size: 13px; font-family: var(--font-body);
+                background: var(--bg3); border: 1px solid var(--border); color: var(--text-dim);
+                border-radius: var(--radius); cursor: pointer; transition: all 0.15s;
+              }
+              .iv-type-btn:hover { border-color: var(--accent); color: var(--text); }
+              .iv-type-btn--active {
+                background: rgba(123,79,200,0.18); border-color: var(--accent); color: var(--accent); font-weight: 600;
+              }
+              .iv-name-input {
+                width: 100%; box-sizing: border-box;
+                background: var(--bg3); border: 1px solid var(--border); color: var(--text);
+                font-size: 13px; font-family: var(--font-body);
+                padding: 7px 10px; border-radius: var(--radius); outline: none;
+              }
+              .iv-name-input:focus { border-color: var(--accent); }
+            `}</style>
             <button className="btn-primary" onClick={runImport} disabled={loading || !text.trim()}>
               {loading ? 'Importing…' : `Import ${text.trim().split('\n').filter(Boolean).length} lines`}
             </button>
