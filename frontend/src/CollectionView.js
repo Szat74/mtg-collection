@@ -131,26 +131,29 @@ function LandRow({ land, decks, onUpdate, onDelete }) {
   }
   const assignedDecks = decks.filter(d => deckCountMap[d.id]);
 
-  const isFoil = !!land.foil;
-  const rawPrice = isFoil
-    ? (land.prices_usd_foil ?? land.prices_usd_etched ?? land.prices_usd)
-    : (land.prices_usd ?? land.prices_usd_foil ?? land.prices_usd_etched);
+  const isFoil   = !!land.foil;
+  const isEtched = !!land.etched;
+  const rawPrice = isEtched
+    ? (land.prices_usd_etched ?? land.prices_usd_foil ?? land.prices_usd)
+    : isFoil
+      ? (land.prices_usd_foil ?? land.prices_usd_etched ?? land.prices_usd)
+      : (land.prices_usd ?? land.prices_usd_foil ?? land.prices_usd_etched);
   const price = rawPrice != null ? `$${parseFloat(rawPrice).toFixed(2)}` : '—';
 
   return (
-    <div className={`land-row${isFoil ? ' foil' : ''}`}>
+    <div className={`land-row${isEtched ? ' etched' : isFoil ? ' foil' : ''}`}>
       <div className="land-row-main">
         <div className="land-thumb-wrap">
           {land.image_uri
             ? <img className="land-thumb" src={land.image_uri} alt={land.name} loading="lazy" />
             : <div className="land-thumb land-thumb-empty" />
           }
-          {isFoil && <span className="land-foil-badge">✦</span>}
+          {isEtched ? <span className="land-foil-badge">⬡</span> : isFoil && <span className="land-foil-badge">✦</span>}
         </div>
         <span className="land-set-badge">
           {land.set_code?.toUpperCase()}{land.collector_number ? ` #${land.collector_number}` : ''}
         </span>
-        {isFoil && <span className="land-foil-label">Foil</span>}
+        {isEtched ? <span className="land-foil-label">Etched</span> : isFoil && <span className="land-foil-label">Foil</span>}
         <span className="land-price">{price}</span>
         <span className="land-qty">×{land.quantity}</span>
         <button className="btn-sm btn-danger" onClick={delAll} title="Remove all copies">✕</button>
@@ -236,20 +239,23 @@ function GalleryTile({ land, decks, onUpdate }) {
   }
   const assignedDecks = decks.filter(d => deckCountMap[d.id]);
 
-  const gFoil = !!land.foil;
-  const gRawPrice = gFoil
-    ? (land.prices_usd_foil ?? land.prices_usd_etched ?? land.prices_usd)
-    : (land.prices_usd ?? land.prices_usd_foil ?? land.prices_usd_etched);
+  const gFoil    = !!land.foil;
+  const gEtched  = !!land.etched;
+  const gRawPrice = gEtched
+    ? (land.prices_usd_etched ?? land.prices_usd_foil ?? land.prices_usd)
+    : gFoil
+      ? (land.prices_usd_foil ?? land.prices_usd_etched ?? land.prices_usd)
+      : (land.prices_usd ?? land.prices_usd_foil ?? land.prices_usd_etched);
   const gPrice = gRawPrice != null ? `$${parseFloat(gRawPrice).toFixed(2)}` : '—';
 
   return (
-    <div className={`land-gallery-tile${gFoil ? ' foil' : ''}${land.full_art ? ' full-art' : ''}`}>
+    <div className={`land-gallery-tile${gEtched ? ' etched' : gFoil ? ' foil' : ''}${land.full_art ? ' full-art' : ''}`}>
       <div className="land-gallery-img-wrap">
         {land.image_uri
           ? <img src={land.image_uri} alt={land.name} loading="lazy" />
           : <div className="land-gallery-placeholder">{land.name}</div>
         }
-        {gFoil && <span className="foil-badge">✦ Foil</span>}
+        {gEtched ? <span className="foil-badge etched-badge">⬡ Etched</span> : gFoil && <span className="foil-badge">✦ Foil</span>}
         <span className="price-overlay">{gPrice}</span>
         {decks.length > 0 && (
           <button
@@ -447,7 +453,7 @@ function CopyRow({ copy, index, decks, cardColorIdentity, onChange }) {
 // ── Card tile (grouped) ───────────────────────────────────────────────────────
 function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, onGroupCreated, bulkMode, selected, onSelect }) {
   const [editing, setEditing]       = useState(false);
-  const [foil, setFoil]             = useState(!!card.foil);
+  const [finish, setFinish]         = useState(card.etched ? 'etched' : card.foil ? 'foil' : 'normal');
   const [copies, setCopies]         = useState(card.copies || []);
   // selGroups: Set of group IDs (integers)
   const [selGroups, setSelGroups]   = useState(() => new Set((card.groups || []).map(g => g.id)));
@@ -457,6 +463,7 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, onGroupC
   useEffect(() => {
     setCopies(card.copies || []);
     setSelGroups(new Set((card.groups || []).map(g => g.id)));
+    setFinish(card.etched ? 'etched' : card.foil ? 'foil' : 'normal');
   }, [card]);
 
   const toggleGroup = (gid) =>
@@ -492,7 +499,8 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, onGroupC
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          foil,
+          foil: finish === 'foil',
+          etched: finish === 'etched',
           deck_id: copy.deck_id ?? null,
           groups: groupIds,
         }),
@@ -517,13 +525,16 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, onGroupC
     onDelete([target.id]);
   };
 
-  const isFoil  = !!card.foil;
-  const hasBack = !!card.image_back;
-  const imgSrc  = flipped && hasBack ? card.image_back : card.image_uri;
+  const isFoil   = !!card.foil;
+  const isEtched = !!card.etched;
+  const hasBack  = !!card.image_back;
+  const imgSrc   = flipped && hasBack ? card.image_back : card.image_uri;
 
-  const rawPrice = isFoil
-    ? (card.prices_usd_foil ?? card.prices_usd_etched ?? card.prices_usd)
-    : (card.prices_usd ?? card.prices_usd_foil ?? card.prices_usd_etched);
+  const rawPrice = isEtched
+    ? (card.prices_usd_etched ?? card.prices_usd_foil ?? card.prices_usd)
+    : isFoil
+      ? (card.prices_usd_foil ?? card.prices_usd_etched ?? card.prices_usd)
+      : (card.prices_usd ?? card.prices_usd_foil ?? card.prices_usd_etched);
   const price = rawPrice ? `$${parseFloat(rawPrice).toFixed(2)}` : null;
 
   // Summarise deck assignments for badge display: deck name → { count, isBinder }
@@ -539,7 +550,7 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, onGroupC
 
   return (
     <div
-      className={`card-tile ${isFoil ? 'foil' : ''} ${bulkMode && selected ? 'bulk-selected' : ''}`}
+      className={`card-tile ${isEtched ? 'etched' : isFoil ? 'foil' : ''} ${bulkMode && selected ? 'bulk-selected' : ''}`}
       onClick={bulkMode ? () => onSelect(card.ids) : undefined}
       style={bulkMode ? { cursor: 'pointer' } : undefined}
     >
@@ -554,7 +565,7 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, onGroupC
           : <div className="card-no-img">{card.name}</div>
         }
         {hasBack && <span className="flip-hint">↻</span>}
-        {isFoil && <span className="foil-badge">✦ Foil</span>}
+        {isEtched ? <span className="foil-badge etched-badge">⬡ Etched</span> : isFoil && <span className="foil-badge">✦ Foil</span>}
         {price && <span className="price-overlay">{price}</span>}
       </div>
       <div className="card-info">
@@ -595,10 +606,16 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, onGroupC
           </div>
         ) : editing ? (
           <div className="card-edit">
-            <label className="foil-toggle">
-              <input type="checkbox" checked={foil} onChange={e => setFoil(e.target.checked)} />
-              Foil
-            </label>
+            <div className="cv-finish-row">
+              <span className="cv-finish-label">Finish</span>
+              <div className="cv-finish-toggle">
+                <button type="button" className={`cv-finish-btn${finish === 'normal' ? ' cv-finish-btn--active' : ''}`} onClick={() => setFinish('normal')}>Normal</button>
+                <button type="button" className={`cv-finish-btn${finish === 'foil' ? ' cv-finish-btn--active' : ''}`} onClick={() => setFinish('foil')}>✦ Foil</button>
+                {(card.prices_usd_etched || card.etched_only) && (
+                  <button type="button" className={`cv-finish-btn${finish === 'etched' ? ' cv-finish-btn--active cv-finish-btn--etched' : ''}`} onClick={() => setFinish('etched')}>⬡ Etched</button>
+                )}
+              </div>
+            </div>
 
             <label className="copies-label">
               Deck per copy
@@ -723,7 +740,9 @@ export default function CollectionView({ cards: initialCards, decks, groups, onG
     if (search)                 params.search = search;
     if (filterDecks.size > 0)  params.deck   = [...filterDecks].join(',');
     if (filterGroups.size > 0) params.group  = [...filterGroups].join(',');
-    if (filterFoil !== '')      params.foil   = filterFoil;
+    if (filterFoil === 'true')   params.foil   = 'true';
+    else if (filterFoil === 'false') params.foil = 'false';
+    else if (filterFoil === 'etched') params.etched = 'true';
     if (filterUnassigned)       params.unassigned = 'true';
     if (filterSets.size > 0)   params.set    = [...filterSets].join(',');
     if (filterColors.size > 0) params.colors = [...filterColors].join(',');
@@ -796,7 +815,7 @@ export default function CollectionView({ cards: initialCards, decks, groups, onG
     const res = await fetch(`${API}/cards/copies`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scryfall_card, foil: card.foil, count: 1 }),
+      body: JSON.stringify({ scryfall_card, foil: card.foil, etched: card.etched, count: 1 }),
     });
     const { ids } = await res.json();
     const newCopy = { id: ids[0], deck_id: null, groups: [] };
@@ -924,6 +943,7 @@ export default function CollectionView({ cards: initialCards, decks, groups, onG
           <select className={filterFoil ? 'filter-active' : ''} value={filterFoil} onChange={e => setFilterFoil(e.target.value)}>
             <option value="">All Finishes</option>
             <option value="true">Foil only</option>
+            <option value="etched">Etched only</option>
             <option value="false">Non-foil only</option>
           </select>
           <MultiSelect

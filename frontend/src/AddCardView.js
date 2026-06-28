@@ -15,7 +15,7 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
 
   // Add-form state
   const [qty, setQty]               = useState(1);
-  const [foil, setFoil]             = useState(false);
+  const [finish, setFinish]         = useState('normal'); // 'normal' | 'foil' | 'etched'
   const [selDeckId, setSelDeckId]   = useState('');
   const [selGroupIds, setSelGroupIds] = useState(new Set());
   const [groupSearch, setGroupSearch] = useState('');
@@ -74,11 +74,17 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
     }
   };
 
-  // Auto-enable foil for foil-only printings
   const selectCard = (card) => {
     setSelectedCard(card);
-    if (!card.prices?.usd && (card.prices?.usd_foil || card.prices?.usd_etched)) {
-      setFoil(true);
+    const finishes = card.finishes || [];
+    if (finishes.length && finishes.every(f => f === 'etched')) {
+      setFinish('etched');
+    } else if (!card.prices?.usd && card.prices?.usd_etched && !card.prices?.usd_foil) {
+      setFinish('etched');
+    } else if (!card.prices?.usd && card.prices?.usd_foil) {
+      setFinish('foil');
+    } else {
+      setFinish('normal');
     }
   };
 
@@ -132,17 +138,19 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
       body: JSON.stringify({
         scryfall_card: selectedCard,
         quantity: qty,
-        foil,
+        foil: finish === 'foil',
+        etched: finish === 'etched',
         deck_id: selDeckId ? parseInt(selDeckId, 10) : null,
         groups: [...selGroupIds],
       }),
     });
 
     if (res.ok) {
-      showToast(`Added ${selectedCard.name} ×${qty}${foil ? ' (foil)' : ''}`);
+      const finishLabel = finish === 'foil' ? ' (foil)' : finish === 'etched' ? ' (etched)' : '';
+      showToast(`Added ${selectedCard.name} ×${qty}${finishLabel}`);
       refresh();
       setQuery(''); setSelectedName(null); setSelectedCard(null); setPrintings([]);
-      setQty(1); setFoil(false); setSelDeckId(''); setSelGroupIds(new Set()); setGroupSearch('');
+      setQty(1); setFinish('normal'); setSelDeckId(''); setSelGroupIds(new Set()); setGroupSearch('');
     } else {
       const err = await res.json().catch(() => ({}));
       showToast(err.error || 'Failed to add card', 'error');
@@ -153,22 +161,35 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
     ? (selectedCard.image_uris?.normal ?? selectedCard.card_faces?.[0]?.image_uris?.normal)
     : null;
 
-  // Build dropdown label for a printing — uses foil price when foil is checked
-	const printingLabel = (card) => {
-	  const set      = card.set_name || card.set || '?';
-	  const code     = (card.set || '???').toUpperCase();
-	  const num      = card.collector_number ? `#${card.collector_number}` : '';
-	  const rawPrice = foil
-		? (card.prices?.usd_foil ?? card.prices?.usd_etched ?? card.prices?.usd)
-		: (card.prices?.usd ?? card.prices?.usd_foil ?? card.prices?.usd_etched);
-	  const priceStr = rawPrice ? ` · $${parseFloat(rawPrice).toFixed(2)}` : '';
-	  // Hint the user if this printing is foil-only
-	  const foilHint = (!card.prices?.usd && (card.prices?.usd_foil || card.prices?.usd_etched)) ? ' ✦' : '';
-	  return `${set} (${code}) ${num}${priceStr}${foilHint}`;
-	};
+  const printingLabel = (card) => {
+    const set      = card.set_name || card.set || '?';
+    const code     = (card.set || '???').toUpperCase();
+    const num      = card.collector_number ? `#${card.collector_number}` : '';
+    const rawPrice = finish === 'etched'
+      ? (card.prices?.usd_etched ?? card.prices?.usd_foil ?? card.prices?.usd)
+      : finish === 'foil'
+        ? (card.prices?.usd_foil ?? card.prices?.usd_etched ?? card.prices?.usd)
+        : (card.prices?.usd ?? card.prices?.usd_foil ?? card.prices?.usd_etched);
+    const priceStr = rawPrice ? ` · $${parseFloat(rawPrice).toFixed(2)}` : '';
+    const foilHint = (!card.prices?.usd && (card.prices?.usd_foil || card.prices?.usd_etched)) ? ' ✦' : '';
+    return `${set} (${code}) ${num}${priceStr}${foilHint}`;
+  };
 
   return (
     <div className="add-view">
+      <style>{`
+        .av-finish-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+        .av-finish-label { font-size: 13px; color: var(--text-dim); white-space: nowrap; }
+        .av-finish-toggle { display: flex; gap: 6px; }
+        .av-finish-btn {
+          padding: 5px 12px; font-size: 13px; font-family: var(--font-body);
+          background: var(--bg3); border: 1px solid var(--border); color: var(--text-dim);
+          border-radius: var(--radius); cursor: pointer; transition: all 0.15s;
+        }
+        .av-finish-btn:hover { border-color: var(--accent); color: var(--text); }
+        .av-finish-btn--active { background: rgba(123,79,200,0.18); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+        .av-finish-btn--etched.av-finish-btn--active { background: rgba(200,160,0,0.15); border-color: #c8a000; color: #c8a000; }
+      `}</style>
       <div className="add-left">
         <h2 className="section-title">Add a Card</h2>
 
@@ -231,10 +252,16 @@ export default function AddCardView({ decks, groups, refresh, showToast, setView
                 <input type="number" min="1" max="99" value={qty}
                   onChange={e => setQty(parseInt(e.target.value) || 1)} />
               </label>
-              <label className="foil-toggle">
-                <input type="checkbox" checked={foil} onChange={e => setFoil(e.target.checked)} />
-                Foil
-              </label>
+            </div>
+            <div className="av-finish-row">
+              <span className="av-finish-label">Finish</span>
+              <div className="av-finish-toggle">
+                <button type="button" className={`av-finish-btn${finish === 'normal' ? ' av-finish-btn--active' : ''}`} onClick={() => setFinish('normal')}>Normal</button>
+                <button type="button" className={`av-finish-btn${finish === 'foil' ? ' av-finish-btn--active' : ''}`} onClick={() => setFinish('foil')}>✦ Foil</button>
+                {(selectedCard?.prices?.usd_etched || selectedCard?.etched_only) && (
+                  <button type="button" className={`av-finish-btn${finish === 'etched' ? ' av-finish-btn--active av-finish-btn--etched' : ''}`} onClick={() => setFinish('etched')}>⬡ Etched</button>
+                )}
+              </div>
             </div>
 
             <label>Location</label>

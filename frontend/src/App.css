@@ -436,6 +436,21 @@ a { color: var(--gold); }
   background: linear-gradient(90deg, var(--foil-a), var(--foil-b));
   color: #fff; font-size: 0.7rem; padding: 2px 8px; border-radius: 20px; font-weight: 700;
 }
+.etched-badge {
+  background: linear-gradient(90deg, #7a5800, #c8a000) !important;
+}
+.card-tile.etched { border-color: #c8a000; }
+.cv-finish-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.cv-finish-label { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+.cv-finish-toggle { display: flex; gap: 5px; }
+.cv-finish-btn {
+  padding: 4px 10px; font-size: 12px; font-family: var(--font-body);
+  background: var(--bg3); border: 1px solid var(--border); color: var(--text-dim);
+  border-radius: var(--radius); cursor: pointer; transition: all 0.15s;
+}
+.cv-finish-btn:hover { border-color: var(--accent); color: var(--text); }
+.cv-finish-btn--active { background: rgba(123,79,200,0.18); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.cv-finish-btn--etched.cv-finish-btn--active { background: rgba(200,160,0,0.15); border-color: #c8a000; color: #c8a000; }
 .price-overlay {
   position: absolute; bottom: 6px; left: 8px;
   background: rgba(0,0,0,0.65);

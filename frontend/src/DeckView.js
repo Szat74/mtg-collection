@@ -116,17 +116,20 @@ function ColorPips({ colors }) {
 
 function DeckCardTile({ card, onRemove, onProxyInc, onProxyDec }) {
   const [flipped, setFlipped] = useState(false);
-  const isFoil  = !!card.foil;
-  const hasBack = !!card.image_back;
-  const imgSrc  = flipped && hasBack ? card.image_back : (card.image_uri ?? card.image_back ?? null);
-  const rawPrice = isFoil
-    ? (card.prices_usd_foil ?? card.prices_usd_etched ?? card.prices_usd)
-    : (card.prices_usd ?? card.prices_usd_foil ?? card.prices_usd_etched);
+  const isFoil   = !!card.foil;
+  const isEtched = !!card.etched;
+  const hasBack  = !!card.image_back;
+  const imgSrc   = flipped && hasBack ? card.image_back : (card.image_uri ?? card.image_back ?? null);
+  const rawPrice = isEtched
+    ? (card.prices_usd_etched ?? card.prices_usd_foil ?? card.prices_usd)
+    : isFoil
+      ? (card.prices_usd_foil ?? card.prices_usd_etched ?? card.prices_usd)
+      : (card.prices_usd ?? card.prices_usd_foil ?? card.prices_usd_etched);
   const price = rawPrice != null ? `$${parseFloat(rawPrice).toFixed(2)}` : null;
   const hasViolations = card.violations?.length > 0;
 
   return (
-    <div className={`card-tile dv-card-tile ${isFoil ? 'foil' : ''} ${hasViolations ? 'has-violation' : ''} ${card.is_proxy ? 'dv-proxy-tile' : ''}`}>
+    <div className={`card-tile dv-card-tile ${isEtched ? 'etched' : isFoil ? 'foil' : ''} ${hasViolations ? 'has-violation' : ''} ${card.is_proxy ? 'dv-proxy-tile' : ''}`}>
       {card.is_proxy && <div className="dv-proxy-banner">PROXY</div>}
       <div className="dv-violation-badges">
         {hasViolations && card.violations.map((v, i) => (
@@ -144,7 +147,7 @@ function DeckCardTile({ card, onRemove, onProxyInc, onProxyDec }) {
           ? <img src={imgSrc} alt={card.name} loading="lazy" />
           : <div className="card-no-img">{card.name}</div>
         }
-        {isFoil && <span className="foil-badge">✦ Foil</span>}
+        {isEtched ? <span className="foil-badge etched-badge">⬡ Etched</span> : isFoil && <span className="foil-badge">✦ Foil</span>}
         {price && <span className="price-overlay">{price}</span>}
         {card.quantity > 1 && !card.is_proxy && <span className="dv-qty-badge">×{card.quantity}</span>}
       </div>
@@ -173,6 +176,7 @@ function DeckListRow({ card, onRemove, onProxyInc, onProxyDec }) {
   const [expandUp, setExpandUp] = useState(false);
   const rowRef = useRef(null);
   const isFoil        = !!card.foil;
+  const isEtched      = !!card.etched;
   const hasBack       = !!card.image_back;
   const imgSrc        = flipped && hasBack ? card.image_back : (card.image_uri ?? card.image_back ?? null);
   const hasViolations = card.violations?.length > 0;
@@ -190,7 +194,7 @@ function DeckListRow({ card, onRemove, onProxyInc, onProxyDec }) {
   }
 
   return (
-    <li ref={rowRef} className={`dv-list-row ${isFoil ? 'dv-list-row--foil' : ''} ${card.is_proxy ? 'dv-list-row--proxy' : ''}`} onMouseLeave={() => setExpanded(false)}>
+    <li ref={rowRef} className={`dv-list-row ${isEtched ? 'dv-list-row--etched' : isFoil ? 'dv-list-row--foil' : ''} ${card.is_proxy ? 'dv-list-row--proxy' : ''}`} onMouseLeave={() => setExpanded(false)}>
       {imgSrc && !expanded && (
         <div className="dv-list-hover-img">
           <img src={imgSrc} alt={card.name} />
@@ -223,7 +227,7 @@ function DeckListRow({ card, onRemove, onProxyInc, onProxyDec }) {
 
       <span className="dv-list-right">
         {card.is_proxy && <span className="dv-list-proxy-badge">PROXY</span>}
-        {isFoil && <span className="dv-list-foil">✦</span>}
+        {isEtched ? <span className="dv-list-foil dv-list-etched">⬡</span> : isFoil && <span className="dv-list-foil">✦</span>}
         {card.is_proxy ? (
           <>
             <button className="dv-proxy-qty-btn dv-proxy-qty-btn--sm" onClick={() => onProxyDec(card)}>−</button>
@@ -354,7 +358,7 @@ export default function DeckView({ decks, refresh, showToast }) {
   const [addResults, setAddResults]     = useState([]);
   const [addPrintings, setAddPrintings] = useState([]);
   const [addSelected, setAddSelected]   = useState(null);
-  const [addFoil, setAddFoil]           = useState(false);
+  const [addFinish, setAddFinish]       = useState('normal'); // 'normal' | 'foil' | 'etched'
   const [addLoading, setAddLoading]     = useState(false);
   const [proxyQty, setProxyQty]         = useState(1);
   const addDebounce = useRef(null);
@@ -402,7 +406,7 @@ export default function DeckView({ decks, refresh, showToast }) {
   // ── Panel helpers ───────────────────────────────────────────────────────────
   const resetAddPanel = () => {
     setAddQuery(''); setAddResults([]); setAddPrintings([]); setAddSelected(null);
-    setAddFoil(false); setProxyQty(1);
+    setAddFinish('normal'); setProxyQty(1);
     setCollSearch(''); setCollResults([]);
   };
 
@@ -421,7 +425,16 @@ export default function DeckView({ decks, refresh, showToast }) {
 
   const selectAddCard = (card) => {
     setAddSelected(card);
-    setAddFoil(!card.prices?.usd && !!(card.prices?.usd_foil || card.prices?.usd_etched));
+    const finishes = card.finishes || [];
+    if (finishes.length && finishes.every(f => f === 'etched')) {
+      setAddFinish('etched');
+    } else if (!card.prices?.usd && card.prices?.usd_etched && !card.prices?.usd_foil) {
+      setAddFinish('etched');
+    } else if (!card.prices?.usd && card.prices?.usd_foil) {
+      setAddFinish('foil');
+    } else {
+      setAddFinish('normal');
+    }
   };
 
   const handleAddQuery = (v) => {
@@ -475,13 +488,13 @@ export default function DeckView({ decks, refresh, showToast }) {
     const res = await fetch(`${API}/cards`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scryfall_card: addSelected, foil: addFoil, deck_id: selectedId }),
+      body: JSON.stringify({ scryfall_card: addSelected, foil: addFinish === 'foil', etched: addFinish === 'etched', deck_id: selectedId }),
     });
     if (res.ok) {
       showToast(`Added ${addSelected.name}`);
       reloadDeck();
       refresh();
-      setAddQuery(''); setAddResults([]); setAddPrintings([]); setAddSelected(null); setAddFoil(false);
+      setAddQuery(''); setAddResults([]); setAddPrintings([]); setAddSelected(null); setAddFinish('normal');
     } else {
       const err = await res.json().catch(() => ({}));
       showToast(err.error || 'Failed to add card', 'error');
@@ -496,12 +509,12 @@ export default function DeckView({ decks, refresh, showToast }) {
     const res = await fetch(`${API}/decks/${selectedId}/proxies`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scryfall_card: addSelected, foil: addFoil, quantity: proxyQty }),
+      body: JSON.stringify({ scryfall_card: addSelected, foil: addFinish === 'foil', etched: addFinish === 'etched', quantity: proxyQty }),
     });
     if (res.ok) {
       showToast(`Added ${proxyQty > 1 ? `${proxyQty}× ` : ''}${addSelected.name} (proxy)`);
       reloadDeck();
-      setAddQuery(''); setAddResults([]); setAddPrintings([]); setAddSelected(null); setAddFoil(false); setProxyQty(1);
+      setAddQuery(''); setAddResults([]); setAddPrintings([]); setAddSelected(null); setAddFinish('normal'); setProxyQty(1);
     } else {
       const err = await res.json().catch(() => ({}));
       showToast(err.error || 'Failed to add proxy', 'error');
@@ -682,10 +695,13 @@ export default function DeckView({ decks, refresh, showToast }) {
             />
           )}
           <div className="dv-add-confirm-actions">
-            <label className="dv-add-foil-label">
-              <input type="checkbox" checked={addFoil} onChange={e => setAddFoil(e.target.checked)} />
-              Foil
-            </label>
+            <div className="dv-finish-toggle">
+              <button type="button" className={`dv-finish-btn${addFinish === 'normal' ? ' dv-finish-btn--active' : ''}`} onClick={() => setAddFinish('normal')}>Normal</button>
+              <button type="button" className={`dv-finish-btn${addFinish === 'foil' ? ' dv-finish-btn--active' : ''}`} onClick={() => setAddFinish('foil')}>✦ Foil</button>
+              {(addSelected?.prices?.usd_etched || addSelected?.etched_only) && (
+                <button type="button" className={`dv-finish-btn${addFinish === 'etched' ? ' dv-finish-btn--active dv-finish-btn--etched' : ''}`} onClick={() => setAddFinish('etched')}>⬡ Etched</button>
+              )}
+            </div>
             {addMode === 'proxy' && (
               <label className="dv-add-foil-label">
                 Qty:
@@ -1043,6 +1059,17 @@ export default function DeckView({ decks, refresh, showToast }) {
           border-top: 1px dashed var(--border); margin-top: 2px;
         }
         .dv-list-foil { font-size: 10px; color: var(--foil-a); }
+        .dv-list-etched { color: #c8a000; }
+        .dv-list-row--etched { background: linear-gradient(90deg, rgba(200,160,0,0.06), transparent); }
+        .dv-finish-toggle { display: flex; gap: 5px; margin-bottom: 6px; }
+        .dv-finish-btn {
+          padding: 4px 10px; font-size: 12px; font-family: var(--font-body);
+          background: var(--bg3); border: 1px solid var(--border); color: var(--text-dim);
+          border-radius: var(--radius); cursor: pointer; transition: all 0.15s;
+        }
+        .dv-finish-btn:hover { border-color: var(--accent); color: var(--text); }
+        .dv-finish-btn--active { background: rgba(123,79,200,0.18); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+        .dv-finish-btn--etched.dv-finish-btn--active { background: rgba(200,160,0,0.15); border-color: #c8a000; color: #c8a000; }
         .dv-list-qty {
           font-size: 10px; color: var(--gold);
           background: rgba(201,168,76,0.12); border: 1px solid rgba(201,168,76,0.25);

@@ -90,6 +90,9 @@ try { db.exec('ALTER TABLE card_cache ADD COLUMN full_art INTEGER DEFAULT 0'); }
 try { db.exec('ALTER TABLE card_cache ADD COLUMN keywords TEXT'); } catch {}
 try { db.exec('ALTER TABLE decks ADD COLUMN partner_id INTEGER REFERENCES collection(id) ON DELETE SET NULL'); } catch {}
 try { db.exec("ALTER TABLE decks ADD COLUMN type TEXT NOT NULL DEFAULT 'deck'"); } catch {}
+try { db.exec('ALTER TABLE card_cache ADD COLUMN etched_only INTEGER DEFAULT 0'); } catch {}
+try { db.exec('ALTER TABLE collection ADD COLUMN etched INTEGER NOT NULL DEFAULT 0'); } catch {}
+try { db.exec('ALTER TABLE deck_proxies ADD COLUMN etched INTEGER NOT NULL DEFAULT 0'); } catch {}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS deck_proxies (
@@ -140,11 +143,11 @@ async function refreshBulkCache() {
       INSERT INTO card_cache
         (scryfall_id, name, set_code, set_name, collector_number, image_uri, image_back,
          mana_cost, type_line, oracle_text, colors, color_identity, full_art, keywords, rarity,
-         prices_usd, prices_usd_foil, prices_usd_etched, foil_only, cached_at)
+         prices_usd, prices_usd_foil, prices_usd_etched, foil_only, etched_only, cached_at)
       VALUES
         (@scryfall_id, @name, @set_code, @set_name, @collector_number, @image_uri, @image_back,
          @mana_cost, @type_line, @oracle_text, @colors, @color_identity, @full_art, @keywords, @rarity,
-         @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, datetime('now'))
+         @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, @etched_only, datetime('now'))
       ON CONFLICT(scryfall_id) DO UPDATE SET
         name=excluded.name, set_code=excluded.set_code, set_name=excluded.set_name,
         collector_number=excluded.collector_number,
@@ -155,7 +158,7 @@ async function refreshBulkCache() {
         keywords=excluded.keywords, rarity=excluded.rarity,
         prices_usd=excluded.prices_usd, prices_usd_foil=excluded.prices_usd_foil,
         prices_usd_etched=excluded.prices_usd_etched, foil_only=excluded.foil_only,
-        cached_at=excluded.cached_at
+        etched_only=excluded.etched_only, cached_at=excluded.cached_at
     `);
     const flushBatch = db.transaction((rows) => { for (const r of rows) upsert.run(r); });
 
@@ -207,7 +210,8 @@ function cardToRow(c) {
     keywords:         c.keywords?.length ? JSON.stringify(c.keywords)       : null,
     rarity:           c.rarity       ?? null,
     ...parsePrices(c.prices),
-    foil_only: (c.foil === true && c.nonfoil === false) ? 1 : 0,
+    foil_only:   (c.foil === true && c.nonfoil === false) ? 1 : 0,
+    etched_only: (c.finishes?.includes('etched') && !c.foil && !c.nonfoil) ? 1 : 0,
   };
 }
 
@@ -262,6 +266,8 @@ function cacheRowToScryfall(c) {
     full_art:         !!c.full_art,
     rarity:           c.rarity,
     prices:           formatPrices(c),
+    foil_only:        c.foil_only   ?? 0,
+    etched_only:      c.etched_only ?? 0,
   };
 }
 
@@ -290,7 +296,8 @@ function mergeCache(collRow) {
     prices_usd:       cache?.prices_usd       ?? null,
     prices_usd_foil:  cache?.prices_usd_foil  ?? null,
     prices_usd_etched:cache?.prices_usd_etched?? null,
-    foil_only:        cache?.foil_only        ?? null,
+    foil_only:        cache?.foil_only   ?? null,
+    etched_only:      cache?.etched_only ?? 0,
   };
 }
 
@@ -320,7 +327,7 @@ const saveGroups = db.transaction((collectionId, groupIds) => {
 function groupRows(rows) {
   const map = new Map();
   for (const row of rows) {
-    const key = `${row.scryfall_id || `unmatched-${row.id}`}||${row.name}||${row.foil}`;
+    const key = `${row.scryfall_id || `unmatched-${row.id}`}||${row.name}||${row.foil}||${row.etched}`;
     if (!map.has(key)) {
       map.set(key, { ...row, quantity: 0, ids: [], copies: [] });
     }
@@ -413,14 +420,14 @@ app.get('/api/cards', (req, res) => {
     name:       'c.name',
     added_at:   'c.added_at',
     set_name:   'cc.set_name',
-    prices_usd: 'CAST(COALESCE(cc.prices_usd_foil, cc.prices_usd, cc.prices_usd_etched) AS REAL)',
+    prices_usd: 'CAST(CASE WHEN c.etched = 1 THEN COALESCE(cc.prices_usd_etched, cc.prices_usd_foil, cc.prices_usd) WHEN c.foil = 1 THEN COALESCE(cc.prices_usd_foil, cc.prices_usd_etched, cc.prices_usd) ELSE COALESCE(cc.prices_usd, cc.prices_usd_foil, cc.prices_usd_etched) END AS REAL)',
     rarity:     "CASE cc.rarity WHEN 'common' THEN 1 WHEN 'uncommon' THEN 2 WHEN 'rare' THEN 3 WHEN 'mythic' THEN 4 ELSE 5 END",
   };
   const col = sortMap[sort] || 'c.name';
   const dir = order === 'desc' ? 'DESC' : 'ASC';
 
   let sql = `
-    SELECT c.id, c.scryfall_id, c.name, c.deck_id, c.foil, c.added_at
+    SELECT c.id, c.scryfall_id, c.name, c.deck_id, c.foil, c.etched, c.added_at
     FROM collection c
     LEFT JOIN card_cache cc ON cc.scryfall_id = c.scryfall_id
   `;
@@ -461,6 +468,11 @@ app.get('/api/cards', (req, res) => {
     sql += ' AND c.foil = ?';
     params.push(foil === 'true' ? 1 : 0);
   }
+  const { etched } = req.query;
+  if (etched !== undefined && etched !== '') {
+    sql += ' AND c.etched = ?';
+    params.push(etched === 'true' ? 1 : 0);
+  }
   if (setCodes.length === 1) {
     sql += ' AND lower(cc.set_code) = ?';
     params.push(setCodes[0]);
@@ -490,7 +502,7 @@ app.get('/api/cards', (req, res) => {
 
 // ── Collection — add one copy ─────────────────────────────────────────────────
 app.post('/api/cards', (req, res) => {
-  const { scryfall_card, foil, deck_id, groups = [] } = req.body;
+  const { scryfall_card, foil, etched, deck_id, groups = [] } = req.body;
   if (!scryfall_card?.name) return res.status(400).json({ error: 'scryfall_card with name is required' });
 
   // Ensure card is in cache if we have a scryfall id
@@ -501,11 +513,11 @@ app.post('/api/cards', (req, res) => {
         INSERT OR IGNORE INTO card_cache
           (scryfall_id, name, set_code, set_name, collector_number, image_uri, image_back,
            mana_cost, type_line, oracle_text, colors, color_identity, full_art, rarity,
-           prices_usd, prices_usd_foil, prices_usd_etched, foil_only, cached_at)
+           prices_usd, prices_usd_foil, prices_usd_etched, foil_only, etched_only, cached_at)
         VALUES
           (@scryfall_id, @name, @set_code, @set_name, @collector_number, @image_uri, @image_back,
            @mana_cost, @type_line, @oracle_text, @colors, @color_identity, @full_art, @rarity,
-           @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, datetime('now'))
+           @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, @etched_only, datetime('now'))
       `).run(cardToRow(scryfall_card));
     }
   }
@@ -529,12 +541,13 @@ app.post('/api/cards', (req, res) => {
     }
   }
 
-  const isFoil = foil ? 1 : (scryfall_card.foil === true && scryfall_card.nonfoil === false ? 1 : 0);
+  const isFoil   = foil   ? 1 : (scryfall_card.foil === true && scryfall_card.nonfoil === false ? 1 : 0);
+  const isEtched = etched ? 1 : (scryfall_card.etched_only ? 1 : 0);
 
   const result = db.prepare(`
-    INSERT INTO collection (scryfall_id, name, deck_id, foil)
-    VALUES (?, ?, ?, ?)
-  `).run(scryfall_card.id ?? null, scryfall_card.name, deck_id ?? null, isFoil);
+    INSERT INTO collection (scryfall_id, name, deck_id, foil, etched)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(scryfall_card.id ?? null, scryfall_card.name, deck_id ?? null, isFoil, isEtched);
 
   const id = result.lastInsertRowid;
   saveGroups(id, groups);
@@ -544,7 +557,7 @@ app.post('/api/cards', (req, res) => {
 
 // ── Collection — add N copies (qty increment) ─────────────────────────────────
 app.post('/api/cards/copies', (req, res) => {
-  const { scryfall_card, foil, count = 1 } = req.body;
+  const { scryfall_card, foil, etched, count = 1 } = req.body;
   if (!scryfall_card?.name) return res.status(400).json({ error: 'scryfall_card with name is required' });
 
   if (scryfall_card.id) {
@@ -554,24 +567,25 @@ app.post('/api/cards/copies', (req, res) => {
         INSERT OR IGNORE INTO card_cache
           (scryfall_id, name, set_code, set_name, collector_number, image_uri, image_back,
            mana_cost, type_line, oracle_text, colors, color_identity, full_art, rarity,
-           prices_usd, prices_usd_foil, prices_usd_etched, foil_only, cached_at)
+           prices_usd, prices_usd_foil, prices_usd_etched, foil_only, etched_only, cached_at)
         VALUES
           (@scryfall_id, @name, @set_code, @set_name, @collector_number, @image_uri, @image_back,
            @mana_cost, @type_line, @oracle_text, @colors, @color_identity, @full_art, @rarity,
-           @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, datetime('now'))
+           @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, @etched_only, datetime('now'))
       `).run(cardToRow(scryfall_card));
     }
   }
 
-  const isFoil = foil ? 1 : (scryfall_card.foil === true && scryfall_card.nonfoil === false ? 1 : 0);
+  const isFoil   = foil   ? 1 : (scryfall_card.foil === true && scryfall_card.nonfoil === false ? 1 : 0);
+  const isEtched = etched ? 1 : (scryfall_card.etched_only ? 1 : 0);
   const insertStmt = db.prepare(`
-    INSERT INTO collection (scryfall_id, name, deck_id, foil) VALUES (?, ?, NULL, ?)
+    INSERT INTO collection (scryfall_id, name, deck_id, foil, etched) VALUES (?, ?, NULL, ?, ?)
   `);
 
   const ids = db.transaction(() => {
     const result = [];
     for (let i = 0; i < count; i++)
-      result.push(insertStmt.run(scryfall_card.id ?? null, scryfall_card.name, isFoil).lastInsertRowid);
+      result.push(insertStmt.run(scryfall_card.id ?? null, scryfall_card.name, isFoil, isEtched).lastInsertRowid);
     return result;
   })();
 
@@ -581,11 +595,12 @@ app.post('/api/cards/copies', (req, res) => {
 // ── Collection — update one copy ──────────────────────────────────────────────
 // Supports: foil, deck_id, scryfall_id (to fix unmatched), groups (array of group IDs)
 app.patch('/api/cards/:id', (req, res) => {
-  const { foil, deck_id, scryfall_id, groups } = req.body;
+  const { foil, etched, deck_id, scryfall_id, groups } = req.body;
   const id = req.params.id;
   const updates = [], params = [];
 
   if (foil !== undefined)        { updates.push('foil = ?');        params.push(foil ? 1 : 0); }
+  if (etched !== undefined)      { updates.push('etched = ?');      params.push(etched ? 1 : 0); }
   if (deck_id !== undefined)     { updates.push('deck_id = ?');     params.push(deck_id ?? null); }
   if (scryfall_id !== undefined) { updates.push('scryfall_id = ?'); params.push(scryfall_id ?? null); }
 
@@ -636,8 +651,10 @@ app.get('/api/stats', (req, res) => {
       COUNT(*)                                                             AS total,
       COUNT(DISTINCT COALESCE(c.scryfall_id, c.name))                     AS unique_count,
       SUM(CASE WHEN c.foil = 1 THEN 1 ELSE 0 END)                         AS foils,
-      SUM(CASE WHEN c.foil = 1
-            THEN COALESCE(cc.prices_usd_foil, cc.prices_usd_etched, cc.prices_usd, 0)
+      SUM(CASE WHEN c.etched = 1 THEN 1 ELSE 0 END)                       AS etcheds,
+      SUM(CASE
+            WHEN c.etched = 1 THEN COALESCE(cc.prices_usd_etched, cc.prices_usd_foil, cc.prices_usd, 0)
+            WHEN c.foil   = 1 THEN COALESCE(cc.prices_usd_foil, cc.prices_usd_etched, cc.prices_usd, 0)
             ELSE COALESCE(cc.prices_usd, 0)
           END)                                                             AS total_value
     FROM collection c
@@ -653,8 +670,9 @@ app.get('/api/stats', (req, res) => {
 
   const byDeck = db.prepare(`
     SELECT d.id, d.name AS deck, COALESCE(d.type, 'deck') AS type, COUNT(*) AS n,
-      SUM(CASE WHEN c.foil = 1
-            THEN COALESCE(cc.prices_usd_foil, cc.prices_usd_etched, cc.prices_usd, 0)
+      SUM(CASE
+            WHEN c.etched = 1 THEN COALESCE(cc.prices_usd_etched, cc.prices_usd_foil, cc.prices_usd, 0)
+            WHEN c.foil   = 1 THEN COALESCE(cc.prices_usd_foil, cc.prices_usd_etched, cc.prices_usd, 0)
             ELSE COALESCE(cc.prices_usd, 0)
           END) AS value
     FROM decks d
@@ -665,8 +683,9 @@ app.get('/api/stats', (req, res) => {
 
   const unassigned = db.prepare(`
     SELECT COUNT(*) AS n,
-      SUM(CASE WHEN c.foil = 1
-            THEN COALESCE(cc.prices_usd_foil, cc.prices_usd_etched, cc.prices_usd, 0)
+      SUM(CASE
+            WHEN c.etched = 1 THEN COALESCE(cc.prices_usd_etched, cc.prices_usd_foil, cc.prices_usd, 0)
+            WHEN c.foil   = 1 THEN COALESCE(cc.prices_usd_foil, cc.prices_usd_etched, cc.prices_usd, 0)
             ELSE COALESCE(cc.prices_usd, 0)
           END) AS value
     FROM collection c
@@ -896,7 +915,7 @@ app.get('/api/decks/:id/cards', (req, res) => {
 
   // Owned cards
   const rows = db.prepare(`
-    SELECT c.id, c.scryfall_id, c.name, c.deck_id, c.foil, c.added_at
+    SELECT c.id, c.scryfall_id, c.name, c.deck_id, c.foil, c.etched, c.added_at
     FROM collection c
     WHERE c.deck_id = ?
     ORDER BY c.name
@@ -915,7 +934,7 @@ app.get('/api/decks/:id/cards', (req, res) => {
       : null;
     return {
       id: proxy.id, scryfall_id: proxy.scryfall_id, name: proxy.name,
-      deck_id: proxy.deck_id, foil: proxy.foil, quantity: proxy.quantity,
+      deck_id: proxy.deck_id, foil: proxy.foil, etched: proxy.etched, quantity: proxy.quantity,
       ids: [proxy.id], copies: [], groups: [], is_proxy: true,
       set_code: cache?.set_code ?? null, set_name: cache?.set_name ?? null,
       collector_number: cache?.collector_number ?? null,
@@ -986,7 +1005,7 @@ app.get('/api/decks/:id/cards', (req, res) => {
 // ── Proxy CRUD ────────────────────────────────────────────────────────────────
 app.post('/api/decks/:id/proxies', (req, res) => {
   const deckId = parseInt(req.params.id, 10);
-  const { scryfall_card, foil, quantity = 1 } = req.body;
+  const { scryfall_card, foil, etched, quantity = 1 } = req.body;
   if (!scryfall_card?.name) return res.status(400).json({ error: 'scryfall_card with name is required' });
 
   // Ensure card is in cache
@@ -996,21 +1015,22 @@ app.post('/api/decks/:id/proxies', (req, res) => {
       INSERT OR IGNORE INTO card_cache
         (scryfall_id, name, set_code, set_name, collector_number, image_uri, image_back,
          mana_cost, type_line, oracle_text, colors, color_identity, full_art, rarity,
-         prices_usd, prices_usd_foil, prices_usd_etched, foil_only, cached_at)
+         prices_usd, prices_usd_foil, prices_usd_etched, foil_only, etched_only, cached_at)
       VALUES
         (@scryfall_id, @name, @set_code, @set_name, @collector_number, @image_uri, @image_back,
          @mana_cost, @type_line, @oracle_text, @colors, @color_identity, @full_art, @rarity,
-         @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, datetime('now'))
+         @prices_usd, @prices_usd_foil, @prices_usd_etched, @foil_only, @etched_only, datetime('now'))
     `).run(cardToRow(scryfall_card));
   }
 
-  const isFoil = foil ? 1 : 0;
-  const qty    = Math.max(1, parseInt(quantity, 10) || 1);
+  const isFoil   = foil   ? 1 : 0;
+  const isEtched = etched ? 1 : 0;
+  const qty      = Math.max(1, parseInt(quantity, 10) || 1);
 
-  // Upsert: if same card+foil already proxied in this deck, increment quantity
+  // Upsert: if same card+foil+etched already proxied in this deck, increment quantity
   const existing = db.prepare(
-    'SELECT id, quantity FROM deck_proxies WHERE deck_id = ? AND name = ? AND foil = ?'
-  ).get(deckId, scryfall_card.name, isFoil);
+    'SELECT id, quantity FROM deck_proxies WHERE deck_id = ? AND name = ? AND foil = ? AND etched = ?'
+  ).get(deckId, scryfall_card.name, isFoil, isEtched);
 
   let proxyId;
   if (existing) {
@@ -1018,8 +1038,8 @@ app.post('/api/decks/:id/proxies', (req, res) => {
     proxyId = existing.id;
   } else {
     const r = db.prepare(
-      'INSERT INTO deck_proxies (deck_id, scryfall_id, name, foil, quantity) VALUES (?, ?, ?, ?, ?)'
-    ).run(deckId, scryfall_card.id ?? null, scryfall_card.name, isFoil, qty);
+      'INSERT INTO deck_proxies (deck_id, scryfall_id, name, foil, etched, quantity) VALUES (?, ?, ?, ?, ?, ?)'
+    ).run(deckId, scryfall_card.id ?? null, scryfall_card.name, isFoil, isEtched, qty);
     proxyId = r.lastInsertRowid;
   }
 
