@@ -611,7 +611,7 @@ function CardTile({ card, decks, groups, onUpdate, onDelete, onAddCopy, onGroupC
               <div className="cv-finish-toggle">
                 <button type="button" className={`cv-finish-btn${finish === 'normal' ? ' cv-finish-btn--active' : ''}`} onClick={() => setFinish('normal')}>Normal</button>
                 <button type="button" className={`cv-finish-btn${finish === 'foil' ? ' cv-finish-btn--active' : ''}`} onClick={() => setFinish('foil')}>✦ Foil</button>
-                {(card.prices_usd_etched || card.etched_only) && (
+                {!!(card.prices_usd_etched || card.etched_only) && (
                   <button type="button" className={`cv-finish-btn${finish === 'etched' ? ' cv-finish-btn--active cv-finish-btn--etched' : ''}`} onClick={() => setFinish('etched')}>⬡ Etched</button>
                 )}
               </div>
