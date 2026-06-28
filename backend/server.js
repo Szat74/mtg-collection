@@ -171,6 +171,14 @@ async function refreshBulkCache() {
 
     db.prepare("INSERT OR REPLACE INTO bulk_meta (key,value) VALUES ('bulk_updated_at',?)").run(entry.updated_at);
     console.log(`[bulk] Done. ${total} cards cached.`);
+
+    // Back-fill etched flag on existing collection rows now that etched_only is populated
+    const fixed = db.prepare(`
+      UPDATE collection SET etched = 1
+      WHERE etched = 0
+      AND scryfall_id IN (SELECT scryfall_id FROM card_cache WHERE etched_only = 1)
+    `).run();
+    if (fixed.changes > 0) console.log(`[bulk] Back-filled etched=1 on ${fixed.changes} collection row(s).`);
   } catch (err) {
     console.error('[bulk] Refresh failed:', err.message);
   }
