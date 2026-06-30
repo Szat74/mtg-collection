@@ -466,7 +466,7 @@ app.get('/api/cards', (req, res) => {
     sql += ' AND c.scryfall_id IS NULL';
   }
   if (unassigned === 'true') {
-    sql += ' AND c.deck_id IS NULL';
+    sql += " AND (c.deck_id IS NULL OR c.deck_id IN (SELECT id FROM decks WHERE type = 'binder'))";
   }
   if (search) {
     sql += ' AND lower(c.name) LIKE lower(?)';
